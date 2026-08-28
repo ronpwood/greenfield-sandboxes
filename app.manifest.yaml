@@ -1,0 +1,17 @@
+# app.manifest.yaml — the single place the factory learns the payload app's identity.
+# `just app swap` edits this file; quality.py, fill.just, and observe.just read it.
+#
+# GREENFIELD MODE: apps/app is a deliberately empty shell — an entry point, a page,
+# and one sanity test. ADWs grow the real application IN PLACE at these exact paths.
+# The paths below are a contract: quality gates lint/typecheck/build the entry and
+# run the fixed suite named here, so a builder that creates its work anywhere else
+# is invisible to the gates. Plans must keep the app rooted at app.dir, the module
+# graph reachable from app.entry, and the durable suite growing in app.test_file.
+app:
+  name: app
+  dir: apps/app
+  entry: apps/app/main.ts                    # bun build target for typecheck/build
+  test_file: apps/app/app.test.ts            # the fixed suite — grows with the app
+  generated_tests_dir: apps/app/tests/generated  # TDD phase writes red suites here
+source:
+  repo: https://github.com/ronpwood/greenfield-sandboxes.git   # what FILL clones into the VM

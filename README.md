@@ -1,0 +1,30 @@
+# greenfield-sandboxes
+
+A Super Simple Software Factory (SSSF) with an **empty payload app**. The factory —
+ADW chains under `adws/`, quality gates, sandbox mount recipes under `just/` and
+`sandbox_mount/` — is fully built. The application is not: `apps/app/` is a deliberate
+shell (an entry point, a page, one sanity test) waiting to be designed and grown by
+the agents that run here.
+
+## The contract
+
+`app.manifest.yaml` at the repo root is the payload app's declared identity. The
+quality gates lint, typecheck, and build `app.entry`, and run the fixed suite at
+`app.test_file`. Work that lands anywhere else is invisible to the gates, so every
+plan must keep the app rooted at `app.dir` and reachable from `app.entry`.
+
+- **Fixed suite** (`apps/app/app.test.ts`) — durable tests that grow with the app.
+- **Generated suites** (`apps/app/tests/generated/`) — the TDD chain's red tests,
+  written before the build and required to fail on the pre-build tree.
+
+## Running
+
+Same as any SSSF repo:
+
+```sh
+uv run adws/adw_tdd_sdlc.py "<prompt or path/to/prompt.md>"     # TDD chain
+uv run adws/adw_simple_sdlc.py "<prompt>"                        # control chain
+```
+
+Inside a sandbox VM this repo is cloned by FILL and provisioned by
+`sandbox_mount/guest/provision.sh`. See `.env.sample` for keys.
