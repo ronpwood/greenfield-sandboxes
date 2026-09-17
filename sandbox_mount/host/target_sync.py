@@ -16,7 +16,9 @@ the copy only stays current if regenerating it is one command. This is that comm
 
 Steps, stopping at the first failure:
   1. preconditions  checkout exists, is clean, on target.branch, fast-forwards to origin;
-                    its app.manifest.yaml app: equals the target file's (the contract)
+                    its app.manifest.yaml app: equals the target file's (the contract);
+                    pristine guard: pristine_paths equal target.pristine and no tracked path
+                    lies outside sync_paths/owned (a merged sandbox run fails here)
   2. export         `git archive HEAD -- <sync_paths>` — tracked files only, so untracked
                     run debris under adws/adw_data/sessions/ can never ship
   3. exclusions     drop just/<host app>.just and the justfile's `mod <host app>` line,
@@ -31,12 +33,14 @@ Steps, stopping at the first failure:
   9. provenance     .sandbox/targets/<name>.json {synced_at, host_sha, target_sha, pushed}
 
 --dry-run runs 1-6, prints the diff stat, and resets the checkout.
+--check-pristine runs only the pristine guard against the checkout as it is (read-only).
 
 The leak check derives every forbidden name; none is written here. This file is
 itself under a sync path, so a literal app name in it would fail its own scan.
 
 Exit codes: 0 synced or nothing to do · 1 precondition/config error · 2 leak found
             3 gate failed · 4 push failed (local commit kept, pushed: false)
+            5 target not pristine (a sandbox run's work is on the branch; nothing touched)
 """
 from __future__ import annotations
 
@@ -98,6 +102,15 @@ def load_config(name: str) -> dict:
         for p in target[key]:
             if p.startswith("/") or ".." in Path(p).parts:
                 raise SyncError(1, f"target.{key} entry {p!r} must be a relative path inside the repo")
+    pristine = target.get("pristine")
+    pristine_paths = [str(p).rstrip("/") for p in target.get("pristine_paths") or []]
+    if pristine_paths and not (isinstance(pristine, str) and re.fullmatch(r"[0-9a-f]{40}", pristine)):
+        raise SyncError(1, f"targets/{name}.yaml target.pristine must be a full 40-hex sha when pristine_paths is set")
+    for p in pristine_paths:
+        # A synced path is regenerated on every sync, so guarding it would only ever
+        # fire on factory drift. The guard is about what the target owns.
+        if any(under(p, sp) or under(sp, p) for sp in target["sync_paths"]):
+            raise SyncError(1, f"target.pristine_paths entry {p!r} overlaps a sync path")
     overlaps = [(s, o) for s in target["sync_paths"] for o in target["owned"] if under(s, o) or under(o, s)]
     if overlaps:
         raise SyncError(1, "sync_paths overlap owned paths: " + ", ".join(f"{s} ~ {o}" for s, o in overlaps))
@@ -110,6 +123,8 @@ def load_config(name: str) -> dict:
         "sync_paths": [str(p).rstrip("/") for p in target["sync_paths"]],
         "owned": [str(p).rstrip("/") for p in target["owned"]],
         "leak_patterns": [str(p) for p in target.get("leak_patterns") or []],
+        "pristine": pristine,
+        "pristine_paths": pristine_paths,
     }
 
 
@@ -144,6 +159,45 @@ def preconditions(cfg: dict) -> None:
     if own != cfg["app"]:
         raise SyncError(1, f"contract mismatch: {co}/app.manifest.yaml app: != targets/{cfg['name']}.yaml app:\n"
                            f"   checkout: {own.model_dump()}\n   target:   {cfg['app'].model_dump()}")
+
+
+def pristine_guard(cfg: dict) -> str:
+    """Refuse a target whose branch carries a sandbox run's work. Read-only.
+
+    Harvest keeps runs in local refs/sandbox/*, so the only way a run reaches the
+    remote is someone merging it into the branch and the next --push publishing
+    it — after which every arm clones an earlier arm's answer. Content, not
+    ancestry: a squash, cherry-pick or hand copy has no common commit to find.
+    Two checks, because each misses a case alone: a plan-only merge leaves apps/
+    identical but adds specs/; a hand-copied app adds no stray path.
+    """
+    co, pristine, paths = cfg["checkout"], cfg["pristine"], cfg["pristine_paths"]
+    if not paths:
+        return "no pristine_paths declared — guard off"
+    if git(co, "cat-file", "-e", f"{pristine}^{{commit}}", check=False).returncode != 0:
+        raise SyncError(1, f"target.pristine {pristine[:12]} is not a commit in {co}")
+
+    details, summary = [], []
+    if git(co, "diff", "--quiet", pristine, "HEAD", "--", *paths, check=False).returncode != 0:
+        changed = git(co, "diff", "--name-only", pristine, "HEAD", "--", *paths).stdout.split()
+        stat = git(co, "diff", "--stat", pristine, "HEAD", "--", *paths).stdout.rstrip()
+        summary.append(f"{len(changed)} file(s) under {', '.join(paths)} differ")
+        details.append(f"differs from pristine {pristine[:12]}:\n{stat}")
+    allowed = cfg["sync_paths"] + cfg["owned"]
+    tracked = git(co, "ls-tree", "-r", "--name-only", "HEAD").stdout.splitlines()
+    stray = [t for t in tracked if not any(under(t, a) for a in allowed)]
+    if stray:
+        summary.append(f"{len(stray)} stray path(s)")
+        details.append("tracked outside sync_paths/owned:\n" + "\n".join(f"   {t}" for t in stray))
+    if summary:
+        branch, name = cfg["branch"], cfg["name"]
+        # First line is the one-line summary `just target show` reports.
+        raise SyncError(5, "target not pristine — " + " / ".join(summary) + "\n"
+                           f"a sandbox run appears merged into {branch}.\n" + "\n".join(details) + "\n"
+                           "Keep results in their own repo (PLAYBOOK § Greenfield runs → Keeping a result). "
+                           f"To recover, reset {branch} to the last factory sync. "
+                           f"If the shell change is intended, bump target.pristine in targets/{name}.yaml.")
+    return f"ok ({', '.join(paths)} unchanged since {pristine[:12]})"
 
 
 # ── 2-3. export + derived exclusions ─────────────────────────────────────────
@@ -325,6 +379,7 @@ def sync(name: str, push: bool, dry_run: bool) -> int:
 
     log("[1/9] preconditions")
     preconditions(cfg)
+    log(f"   pristine: {pristine_guard(cfg)}")
 
     with tempfile.TemporaryDirectory(prefix=f"target-sync-{name}-") as tmp:
         src = Path(tmp)
@@ -414,10 +469,14 @@ def main() -> int:
     ap.add_argument("name", help="a targets/<name>.yaml stem")
     ap.add_argument("--push", action="store_true", help="push the sync commit (outward-facing)")
     ap.add_argument("--dry-run", action="store_true", help="export, check, mirror, gate — then reset")
+    ap.add_argument("--check-pristine", action="store_true", help="only the pristine guard, read-only; exit 0 or 5")
     args = ap.parse_args()
-    if args.push and args.dry_run:
-        ap.error("--push and --dry-run are mutually exclusive")
+    if sum((args.push, args.dry_run, args.check_pristine)) > 1:
+        ap.error("--push, --dry-run and --check-pristine are mutually exclusive")
     try:
+        if args.check_pristine:
+            print(f"pristine: {pristine_guard(load_config(args.name))}")
+            return 0
         return sync(args.name, args.push, args.dry_run)
     except SyncError as e:
         print(f"target sync: {e}", file=sys.stderr)

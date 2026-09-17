@@ -42,6 +42,14 @@ show NAME:
     echo "# targets/$name.yaml"
     cat "targets/$name.yaml"
     echo
+    # The guard lives in target_sync.py; this only reports its first line.
+    # Exit 0 prints "pristine: ok (...)"; exit 5 prints the one-line summary.
+    if out=$(uv run -q sandbox_mount/host/target_sync.py "$name" --check-pristine 2>&1); then
+        echo "$out"
+    else
+        echo "$out" | head -1 | sed 's/^target sync: target not pristine/pristine: DIRTY/'
+        echo "  (details: uv run sandbox_mount/host/target_sync.py $name --check-pristine)"
+    fi
     prov=".sandbox/targets/$name.json"
     if [ -f "$prov" ]; then
         echo "# $prov (last sync)"
