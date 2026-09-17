@@ -22,11 +22,18 @@
 # at .sandbox/runs/<id>.bundle IS the record, the same reasoning that makes
 # `.agent-started` a sentinel file rather than a field. The schema stays closed.
 #
+# WHERE IT LANDS depends on the run's target. A `default` run's base commit is in
+# this repo, so the bundle is fetched here. A named target's base is a commit of
+# THAT repo (targets/<name>.yaml target.checkout) — this repo's history does not
+# have it, `git bundle verify` would refuse, so the bundle is verified and fetched
+# into the target's checkout instead. The bundle file itself stays host-side under
+# .sandbox/runs/ either way.
+#
 # IDEMPOTENT: re-running overwrites the bundle and force-updates the ref. It only
 # ever writes refs under refs/sandbox/ — never your working tree, index, or any
 # branch you own.
 
-# pull a run's commits home as a git bundle: just sbx manage harvest <run-id>
+# pull a run's commits home as a git bundle (named targets land in their checkout): just sbx manage harvest <run-id>
 harvest RUN_ID:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -44,6 +51,24 @@ harvest RUN_ID:
     "$RR" get "$RUN_ID" > /dev/null || { echo "!! harvest: no run record for $RUN_ID"; exit 1; }
     VM=$("$RR" get "$RUN_ID" vm_name)
     BASE=$("$RR" get "$RUN_ID" commit_sha)
+    TARGET=$("$RR" get "$RUN_ID" target)
+
+    # GIT is where the bundle is verified and fetched; BUNDLE_AT is how that git
+    # names the file (git -C resolves relative paths against the checkout).
+    GIT=(git)
+    GIT_SHOWN="git"
+    CHECKOUT=""
+    BUNDLE_AT="$BUNDLE"
+    if [ "$TARGET" != "default" ]; then
+        CHECKOUT_REL=$(uv run -q adws/adw_modules/manifest.py get-target-section "$TARGET" checkout)
+        CHECKOUT=$(cd "$CHECKOUT_REL" 2> /dev/null && pwd) \
+            || { echo "!! harvest: target $TARGET checkout $CHECKOUT_REL does not exist"; exit 1; }
+        git -C "$CHECKOUT" rev-parse --git-dir > /dev/null 2>&1 \
+            || { echo "!! harvest: target $TARGET checkout $CHECKOUT is not a git repo"; exit 1; }
+        GIT=(git -C "$CHECKOUT")
+        GIT_SHOWN="git -C $CHECKOUT"
+        BUNDLE_AT="$PWD/$BUNDLE"
+    fi
 
     # Both of these are "nothing to do", not failures — teardown calls this on runs
     # that died anywhere, and a missing piece is the normal path.
@@ -88,19 +113,19 @@ harvest RUN_ID:
 
     # Verify BEFORE fetching. This is where a bundle whose base the host does not
     # have fails, and it fails loudly rather than importing something detached.
-    if ! git bundle verify "$BUNDLE" > /dev/null 2>&1; then
-        echo "!! harvest: $BUNDLE failed verification — this host may not have $BASE"
-        git bundle verify "$BUNDLE" || true
+    if ! "${GIT[@]}" bundle verify "$BUNDLE_AT" > /dev/null 2>&1; then
+        echo "!! harvest: $BUNDLE failed verification — $GIT_SHOWN may not have $BASE (target $TARGET)"
+        "${GIT[@]}" bundle verify "$BUNDLE_AT" || true
         echo "!! the bundle is kept at $BUNDLE for inspection. VM left alone."
         exit 1
     fi
 
     # --force so a re-harvest of a run that committed more since last time updates
     # the ref instead of refusing a non-fast-forward.
-    git fetch --force --quiet "$BUNDLE" "refs/heads/$BRANCH:$DEST" \
+    "${GIT[@]}" fetch --force --quiet "$BUNDLE_AT" "refs/heads/$BRANCH:$DEST" \
         || { echo "!! harvest: fetch into $DEST failed — bundle kept at $BUNDLE"; exit 1; }
 
-    echo "   harvest: $COUNT commit(s) -> $DEST"
+    echo "   harvest: $COUNT commit(s) -> $DEST${CHECKOUT:+ in $CHECKOUT (target $TARGET)}"
     echo "     bundle:  $BUNDLE"
-    echo "     read it: git log --oneline --graph $BASE..$DEST"
-    echo "     diff it: git diff $BASE..$DEST"
+    echo "     read it: $GIT_SHOWN log --oneline --graph $BASE..$DEST"
+    echo "     diff it: $GIT_SHOWN diff $BASE..$DEST"

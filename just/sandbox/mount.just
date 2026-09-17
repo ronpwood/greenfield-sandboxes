@@ -6,11 +6,10 @@
 #
 # Imported by the root justfile, so no `set` lines here.
 
-# create -> fill -> setup -> observe. Stops at observe by design: teardown is
-# ALWAYS an explicit separate decision, never chained.
-#   just sbx mount <task> [--limit N] [--target NAME]
 # FLAGS forward to create, which records --target; fill pins a named target to
-# its last pushed `just target sync`.
+# its last pushed `just target sync`. Stops at observe by design: teardown is
+# ALWAYS an explicit separate decision, never chained.
+# create -> fill -> setup -> observe, never teardown: just sbx mount <task> [--limit N] [--target NAME]
 mount RUN_ID *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail

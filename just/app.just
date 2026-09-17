@@ -79,5 +79,7 @@ swap SOURCE NAME:
     echo "     the boot command in just/sandbox/lifecycle/observe.just if the app"
     echo "     isn't a static Bun HTML entry"
     echo "  6. Run one ADW end-to-end to confirm the quality gates pass"
+    echo "  (targets/*.yaml need no edit: target sync derives forbidden app names from"
+    echo "   app.manifest.yaml and archive/, so the old app becomes a leak pattern by itself)"
     echo ""
     echo "Ask Claude to do steps 1-6 in a fresh conversation — this command only moved files."
