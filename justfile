@@ -46,6 +46,9 @@ mod adw 'just/adws.just'
 # sandbox orchestration: mount, execute, observe, tear down VMs
 mod sbx 'just/sandbox/mod.just'
 
+# named targets a sandbox can mount instead of this repo: just target sync greenfield
+mod target 'just/target.just'
+
 # read the trace db: sessions, phases, tail, procs
 mod obs 'just/obs.just'
 

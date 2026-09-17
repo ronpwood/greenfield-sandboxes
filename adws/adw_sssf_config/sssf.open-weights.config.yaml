@@ -1,8 +1,8 @@
 # sssf.open-weights.config.yaml — the open-weight all-stars.
 # Known as: the open-weights roster, the open models. Same file.
 #
-# Only open-weight models (Kimi K3, GLM-5.2, DeepSeek — all open licenses,
-# served by US hosts under ZDR), strongest open model per lane: GLM-5.2 takes
+# Only open-weight models (Kimi K3, GLM-5.3, DeepSeek — all open licenses,
+# served by US hosts under ZDR), strongest open model per lane: GLM-5.3 takes
 # the judgement seats, Kimi K3 builds, DeepSeek runs the mechanical lanes.
 # Nothing but the roster changes. Same ADW scripts, same prompts, same gates,
 # same trace: swapping this file in is the whole migration.
@@ -48,7 +48,7 @@ observability:
 
 agents:
   - name: planner
-    model: openrouter/z-ai/glm-5.2   # strongest open judgement in the registry
+    model: openrouter/z-ai/glm-5.3   # strongest open judgement in the registry
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.
     prompt_engineering:
@@ -115,7 +115,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openrouter/z-ai/glm-5.2   # judgement against a spec — the same strength that earns it the plan
+    model: openrouter/z-ai/glm-5.3   # judgement against a spec — the same strength that earns it the plan
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
     prompt_engineering:

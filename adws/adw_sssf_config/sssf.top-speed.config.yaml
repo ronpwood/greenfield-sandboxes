@@ -1,7 +1,7 @@
 # sssf.top-speed.config.yaml — the fast three: flash-class models everywhere.
 # Known as: the top-speed roster, the fast roster. Same file.
 #
-# DeepSeek, Gemini 3.6 Flash, and GPT-5.6 Luna — all latency-optimized models,
+# DeepSeek, Gemini 3.8 Flash, and GPT-5.6 Luna — all latency-optimized models,
 # cast by lane type: Gemini Flash takes the judgement seats (the default roster
 # already trusts it with the plan), DeepSeek runs the mechanical lanes, Luna
 # writes the docs. Nothing but the roster changes. Same ADW scripts, same
@@ -48,7 +48,7 @@ observability:
 
 agents:
   - name: planner
-    model: openrouter/google/gemini-3.6-flash   # the default roster already trusts it with the plan
+    model: openrouter/google/gemini-3.8-flash   # the default roster already trusts it with the plan
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.
     prompt_engineering:
@@ -115,7 +115,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openrouter/google/gemini-3.6-flash   # judgement lane gets the strongest of the fast three
+    model: openrouter/google/gemini-3.8-flash   # judgement lane gets the strongest of the fast three
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
     prompt_engineering:

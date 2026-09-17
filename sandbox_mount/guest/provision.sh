@@ -31,41 +31,59 @@ say "$REPO_ROOT"
 say "commit $(git rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout')"
 
 # ── 2. bun ───────────────────────────────────────────────────────────────────
-# PINNED, and the pin is load-bearing. This install used to be unversioned
-# (`| bash`), which meant every mount got whatever bun shipped that day.
+# Versions come from toolchain.lock, never from a variable in this file. Each
+# row is `<tool> <version> <mode>`, mode ∈ pin / float / image (defined in the
+# lock's header). What actually landed is reported by toolchain_report.sh in
+# step 9 and again by gate F in setup.just, so drift is visible, not frozen.
 #
-# MEASURED FAILURE: bun 1.4.0 released 2026-08-20. The last good mount was
-# 2026-08-18 on 1.3.x; the next mounts, on 2026-08-21, were the first to get
-# 1.4.0 and all five failed OBSERVE's public-access check with a 403. Cause: in
-# 1.4.0 `bun index.html` (the HTML dev server) binds 127.0.0.1 instead of
-# 0.0.0.0 AND enforces a Host-header check, answering "Blocked: Host header does
-# not match the dev server" to requests arriving as <vm>.exe.xyz. The exe.dev
-# proxy can reach neither. Nothing in this repo had changed — observe.just was
-# byte-identical to the successful run. The toolchain moved underneath it.
-#
-# Neither behaviour is configurable in that mode: `--host` is not a flag (bun
-# reads the value as a FILENAME), BUN_HOSTNAME is ignored, `[serve.static]
-# hostname` in bunfig.toml is ignored, and bridging the loopback bind with socat
-# just exposes the Host check underneath. All four were tried on a live box.
-#
-# 1.3.14 is the last release before 1.4.0 and the line every prior successful
-# cycle ran on. Bumping this is a deliberate act: re-verify OBSERVE's [6/6]
-# public check on a real box before changing it.
-BUN_VERSION="1.3.14"
-step "2/9 bun (pinned ${BUN_VERSION})"
-# Version-aware, not just presence-aware. `command -v bun` alone would accept a
-# WRONG version left on a re-provisioned or golden-copied VM and skip the
-# install silently — which is the same class of bug the pin exists to kill.
-if [[ "$(bun --version 2>/dev/null || true)" == "$BUN_VERSION" ]]; then
-  say "already installed: $(bun --version)"
-else
-  if command -v bun >/dev/null 2>&1; then
-    say "found $(bun --version), replacing with pinned ${BUN_VERSION}"
-  fi
-  # `-s bun-v<version>` is the installer's own pin argument.
-  curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
-  say "installed ${BUN_VERSION}"
+# HISTORY: bun 1.4.0 (2026-08-20) added a Host-header guard to `bun index.html`
+# and the five 2026-08-21 mounts failed OBSERVE with a 403; the fix that day
+# was a hard pin to 1.3.14. The serving layer no longer depends on it —
+# observe.just fronts the dev server with sandbox_mount/guest/app_proxy.ts,
+# which rewrites Host to localhost — so bun floats again.
+# See specs/toolchain-unpin-and-drift-visibility.md and NEXTSTEPS.md (2026-08-30).
+LOCK="${SCRIPT_DIR}/toolchain.lock"
+[[ -f "$LOCK" ]] || { echo "[provision] missing ${LOCK}" >&2; exit 1; }
+lock_want() { awk -v t="$1" '$1==t {print $2}' "$LOCK"; }
+lock_mode() { awk -v t="$1" '$1==t {print $3}' "$LOCK"; }
+
+want="$(lock_want bun)"; mode="$(lock_mode bun)"
+# ONE-MOUNT ESCAPE HATCH: `BUN_VERSION=x.y.z just sbx mount <id>` — setup.just
+# forwards it over ssh — overrides the lock and forces a pin at that version,
+# for the day a fresh release is bad and there is no time for a lock commit.
+if [[ -n "${BUN_VERSION:-}" ]]; then
+  want="$BUN_VERSION"; mode="pin"
 fi
+step "2/9 bun (${mode} ${want})"
+case "$mode" in
+  pin)
+    # Version-aware, not just presence-aware: `command -v bun` alone would
+    # accept a WRONG version left on a re-provisioned or golden-copied VM and
+    # skip the install silently — the class of bug a pin exists to kill.
+    if [[ "$(bun --version 2>/dev/null || true)" == "$want" ]]; then
+      say "already installed: $(bun --version)"
+    else
+      if command -v bun >/dev/null 2>&1; then
+        say "found $(bun --version), replacing with pinned ${want}"
+      fi
+      # `-s bun-v<version>` is the installer's own pin argument.
+      curl -fsSL https://bun.sh/install | bash -s "bun-v${want}"
+      say "installed ${want}"
+    fi
+    ;;
+  float)
+    # Latest, and only when absent. NEVER upgrade or downgrade an existing
+    # binary: a golden-copied VM keeps the bun it was built with, and gate F
+    # makes that age visible instead of this script silently erasing it.
+    if command -v bun >/dev/null 2>&1 || [[ -x "$HOME/.bun/bin/bun" ]]; then
+      say "already installed — leaving it alone"
+    else
+      curl -fsSL https://bun.sh/install | bash
+      say "installed latest"
+    fi
+    ;;
+  *) echo "[provision] toolchain.lock: bun mode '${mode}' is not pin|float" >&2; exit 1 ;;
+esac
 # The installer only edits shell rc files, which this non-interactive shell never
 # reads — put it on PATH by hand for the rest of the run.
 if [[ -d "$HOME/.bun/bin" ]]; then
@@ -82,27 +100,54 @@ if [[ -x "$HOME/.bun/bin/bun" ]] && [[ ! -e /usr/local/bin/bun ]]; then
   say "linked into /usr/local/bin for non-interactive ssh"
 fi
 command -v bun >/dev/null 2>&1 || { echo "[provision] bun not on PATH after install" >&2; exit 1; }
-# Assert the pin actually took. A silent drift here reintroduces the exact 403
-# this pin was added to prevent, and it would surface three phases later as an
-# unexplained proxy failure rather than as an install problem.
-if [[ "$(bun --version)" != "$BUN_VERSION" ]]; then
-  echo "[provision] bun version mismatch: wanted ${BUN_VERSION}, got $(bun --version)" >&2
+# A pin is asserted here, at the install, so a mismatch reads as an install
+# problem and not as something three phases later. A float only records.
+if [[ "$mode" == "pin" && "$(bun --version)" != "$want" ]]; then
+  echo "[provision] bun version mismatch: wanted ${want}, got $(bun --version)" >&2
   exit 1
 fi
+say "bun $(bun --version) (${mode}, baseline ${want})"
 
 # ── 3. just ──────────────────────────────────────────────────────────────────
-# Never apt. Note for anything that calls just in here later:
-#   just --shell bash --shell-arg -c
-# the root justfile sets `zsh -ic` and zsh is not in the image.
-step "3/9 just"
-if command -v just >/dev/null 2>&1; then
-  say "already installed: $(just --version)"
-else
-  curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-    | sudo bash -s -- --to /usr/local/bin
-  say "installed"
-fi
+# Same lock, same modes. Never apt. Note for anything that calls just in here
+# later:  just --shell bash --shell-arg -c  — the root justfile sets `zsh -ic`
+# and zsh is not in the image.
+want="$(lock_want just)"; mode="$(lock_mode just)"
+step "3/9 just (${mode} ${want})"
+just_version() { just --version 2>/dev/null | awk '{print $2}'; }
+case "$mode" in
+  pin)
+    if [[ "$(just_version || true)" == "$want" ]]; then
+      say "already installed: $(just --version)"
+    else
+      if command -v just >/dev/null 2>&1; then
+        say "found $(just --version), replacing with pinned ${want}"
+      fi
+      # `--tag` is the installer's own version argument; `--force` lets it
+      # overwrite the binary a previous provision left in /usr/local/bin.
+      curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+        | sudo bash -s -- --tag "$want" --to /usr/local/bin --force
+      say "installed ${want}"
+    fi
+    ;;
+  float)
+    if command -v just >/dev/null 2>&1; then
+      say "already installed — leaving it alone"
+    else
+      curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+        | sudo bash -s -- --to /usr/local/bin
+      say "installed latest"
+    fi
+    ;;
+  *) echo "[provision] toolchain.lock: just mode '${mode}' is not pin|float" >&2; exit 1 ;;
+esac
 command -v just >/dev/null 2>&1 || { echo "[provision] just not on PATH after install" >&2; exit 1; }
+if [[ "$mode" == "pin" && "$(just_version)" != "$want" ]]; then
+  echo "[provision] just version mismatch: wanted ${want}, got $(just_version)" >&2
+  exit 1
+fi
+say "just $(just_version) (${mode}, baseline ${want})"
+unset want mode
 
 # ── 4. pi model registry ─────────────────────────────────────────────────────
 # ~/.pi/agent/models.json does not exist on a fresh VM, and without it
@@ -259,12 +304,10 @@ fi
 # ── summary ──────────────────────────────────────────────────────────────────
 step "9/9 summary"
 say "repo    $REPO_ROOT @ $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-say "bun     $(bun --version)"
-say "just    $(just --version)"
-say "uv      $(uv --version)"
-say "pi      $(pi --version 2>/dev/null || echo 'not installed')"
-say "claude  $(claude --version 2>/dev/null || echo 'not installed')"
-say "python  $(python3 --version)"
+# One source of truth for "what is on this box": the same script gate F runs.
+# Informational here (a pin mismatch on bun/just already failed above, and the
+# gate is the enforcer for the rest), hence the `|| true`.
+bash "${SCRIPT_DIR}/toolchain_report.sh" | sed 's/^/   /' || true
 # `|| true` inside the pipeline, not after it: pipefail would otherwise hand the
 # failure of an absent/unhappy pi to the ERR trap and skip the sentinel below.
 say "models  $( { pi --list-models 2>/dev/null || true; } | grep -c . || true ) lines from pi --list-models"

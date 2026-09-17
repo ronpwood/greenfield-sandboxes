@@ -13,13 +13,17 @@
 # Nothing here ever destroys a VM. Failures stop and print the teardown command;
 # the box stays alive so it can be inspected.
 
-# mint a runtime key + boot a VM for one run: just sbx lifecycle create <task-or-run-id> [--limit 200]
+# mint a runtime key + boot a VM for one run: just sbx lifecycle create <task-or-run-id> [--limit 200] [--target NAME]
 create RUN_ID *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
 
     RR="sandbox_mount/host/run_record.py"
-    LIMIT="50.00"   # dollars on the OpenRouter key; the only knob CREATE has
+    LIMIT="50.00"   # dollars on the OpenRouter key
+    # Which codebase FILL clones: `default` (the root app.manifest.yaml) or a
+    # targets/<name>.yaml. Recorded once here; every later phase reads it from the
+    # record, never from a flag, so a run can't change codebases halfway through.
+    TARGET="default"
 
     # $1 is RUN_ID, the variadic FLAGS follow (root sets positional-arguments).
     shift || true
@@ -27,7 +31,9 @@ create RUN_ID *FLAGS:
         case "$1" in
             --limit)   LIMIT="${2:-}"; shift 2 || true ;;
             --limit=*) LIMIT="${1#*=}"; shift ;;
-            *) echo "create: unknown flag '$1' (supported: --limit N)" >&2; exit 2 ;;
+            --target)   TARGET="${2:-}"; shift 2 || true ;;
+            --target=*) TARGET="${1#*=}"; shift ;;
+            *) echo "create: unknown flag '$1' (supported: --limit N, --target NAME)" >&2; exit 2 ;;
         esac
     done
     if ! [[ "$LIMIT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -44,6 +50,11 @@ create RUN_ID *FLAGS:
     if [ -z "${OPENROUTER_PROVISIONING_KEY:-}" ]; then
         echo "create: OPENROUTER_PROVISIONING_KEY missing from .env (host-only, mints/revokes runtime keys)" >&2
         exit 1
+    fi
+    # manifest.py list is the only authority on target names (it rejects paths).
+    if ! uv run -q adws/adw_modules/manifest.py list | grep -qx -- "$TARGET"; then
+        echo "create: unknown target '$TARGET'; known: $(uv run -q adws/adw_modules/manifest.py list | paste -sd, -)" >&2
+        exit 2
     fi
 
     # ── 1. run id ──────────────────────────────────────────────────────────────
@@ -63,6 +74,8 @@ create RUN_ID *FLAGS:
     # ── 2. run record (before the VM: teardown always has something to find) ───
     RECORD="$("$RR" create "$RUN_ID")"
     echo "record:  $RECORD"
+    "$RR" set "$RUN_ID" target="$TARGET"
+    echo "target:  $TARGET"
 
     # From here on a failure leaves real resources. Never destroy anything —
     # report, stop, and say how to clean up. BODY holds the mint response (which
@@ -79,10 +92,12 @@ create RUN_ID *FLAGS:
     trap _on_exit EXIT
 
     # ── 3. the VM ──────────────────────────────────────────────────────────────
-    # Control plane is plain ssh; --json makes it scriptable. --tag inkwell is
-    # what `reap` and bulk cleanup filter on.
-    echo "vm:      creating $RUN_ID (ssh exe.dev new --tag inkwell) ..."
-    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag inkwell --json)"
+    # Control plane is plain ssh; --json makes it scriptable. --tag sssf marks
+    # factory VMs for manual `ssh exe.dev ls` triage; nothing filters on it —
+    # `reap` and `list` select by run record. App-neutral on purpose: this file
+    # is synced into target repos, where an app name would be a leak.
+    echo "vm:      creating $RUN_ID (ssh exe.dev new --tag sssf) ..."
+    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag sssf --json)"
 
     # The exact key names of `new --json` are UNVERIFIED (only `ls --json` was
     # observed: {"vms":[{vm_name,https_url,ssh_dest,...}]}). Accept the shapes we

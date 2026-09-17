@@ -5,7 +5,7 @@
 # `positional-arguments` is a hard error at parse time.
 #
 # What this phase does: run provision.sh inside the sandbox, wait for its
-# sentinel, then run the five-assertion health gate. Nothing here creates or
+# sentinel, then run the six-assertion health gate. Nothing here creates or
 # destroys a VM. On failure it prints how to get into the box and exits
 # non-zero, because a gate that auto-destroys throws away the evidence.
 #
@@ -22,6 +22,14 @@
 # a different roster, every arm was gated against models it would never call —
 # the gate passed and told you nothing. Pass the same path here that you pass to
 # `just sbx lifecycle execute`.
+#
+# BUN_VERSION is the one-mount escape hatch for the toolchain baseline
+# (sandbox_mount/guest/toolchain.lock). Normally unset: provision installs bun
+# per the lock (float = latest on a fresh box) and gate F reports what landed.
+#   BUN_VERSION=1.3.14 just sbx mount <id>          # pin ONE mount, no commit
+#   BUN_VERSION=1.3.14 just sbx lifecycle setup <id> # re-pin a box already up
+# It forces `pin` at that version for this provision run only; the version-aware
+# replace path swaps whatever bun is on the box. Empty means "obey the lock".
 
 # phase 3: provision the sandbox, then gate it (never destroys the VM). CONFIG picks the roster C pings
 setup RUN_ID CONFIG="":
@@ -64,7 +72,10 @@ setup RUN_ID CONFIG="":
     "${SSH[@]}" 'rm -f /tmp/PROVISION_READY' < /dev/null \
       || gate_fail "cannot reach ${HOST} over ssh"
     # < /dev/null so ssh does not swallow this script's stdin; output streams live.
-    "${SSH[@]}" 'bash app/sandbox_mount/guest/provision.sh' < /dev/null \
+    # BUN_VERSION rides along as a remote assignment, not an env var: `ssh host
+    # cmd` carries no environment. Empty on the host -> empty on the box ->
+    # provision reads toolchain.lock as usual. See the header for when to set it.
+    "${SSH[@]}" "BUN_VERSION='${BUN_VERSION:-}' bash app/sandbox_mount/guest/provision.sh" < /dev/null \
       || gate_fail "provision.sh exited non-zero (its last '── step ──' line names the stage)"
 
     # ── 2. sentinel ──────────────────────────────────────────────────────────
@@ -83,7 +94,7 @@ setup RUN_ID CONFIG="":
     echo "[setup]     sentinel present"
 
     # ── 3. the gate ──────────────────────────────────────────────────────────
-    echo "[setup] 3/3 health gate (5 assertions)"
+    echo "[setup] 3/3 health gate (6 assertions)"
 
     # A — git integrity. Content, not existence: an unsynced golden-VM clone
     # produced 5,641 zero-byte files and reported success, and truncation shows
@@ -269,6 +280,29 @@ setup RUN_ID CONFIG="":
         3) gate_fail "assertion D — no spend delta and/or no rate table in models.json" ;;
         *) gate_fail "assertions C/D/E — the remote gate script exited ${rc} (see output above)" ;;
       esac
+    fi
+
+    # F — toolchain report. Every tool in sandbox_mount/guest/toolchain.lock,
+    # baseline beside actual, and the actuals stored in the run record so the
+    # question "which version was that run on" has an answer forever. Runs at
+    # gate time against the binaries, so a golden VM that skipped every install
+    # step is reported just as honestly as a fresh one. DRIFT on a float/image
+    # row is information, not failure: the gate fails only when a `pin` row
+    # does not match. The bump ritual lives in PLAYBOOK.md ("Toolchain baseline").
+    echo "[gate] F toolchain report"
+    f_rc=0
+    "${SSH[@]}" 'bash app/sandbox_mount/guest/toolchain_report.sh' < /dev/null | sed 's/^/   /' || f_rc=$?
+    TC_JSON="$("${SSH[@]}" 'bash app/sandbox_mount/guest/toolchain_report.sh --json' < /dev/null || true)"
+    if [ -n "$TC_JSON" ]; then
+      "$RR" set {{RUN_ID}} "toolchain=${TC_JSON}"
+      echo "   recorded in the run record: ${TC_JSON}"
+    else
+      gate_fail "assertion F — toolchain_report.sh produced no report (is the branch on the box older than this recipe?)"
+    fi
+    if [ "$f_rc" -eq 0 ]; then
+      echo "[gate] F PASS  toolchain reported (DRIFT lines above, if any, are informational)"
+    else
+      gate_fail "assertion F — pinned tool mismatch (see the table above)"
     fi
 
     echo ""

@@ -422,18 +422,38 @@ class UsageBreakdown(BaseModel):
     # at the output rate. Report it nested under output, never added to it.
     reasoning_tokens: int = 0
     total_tokens: int = 0
+    # Provider generation ids, one per turn, in order. NOT a number, but it
+    # lives here so it rides the same plumbing: `merge()` concatenates lists
+    # with the same `+` it uses to add ints, and `model_dump()` carries it into
+    # the trace payload without agents.py needing to know.
+    #
+    # These are what make cost RECONCILABLE instead of recomputed. Every figure
+    # below is derived from a local rate table, and on 2026-09-07 that table was
+    # wrong for 7 of 11 models while a separate 26% of spend never reached the
+    # trace at all (see NEXTSTEPS 2026-09-07d/e). An id per turn lets a run be
+    # checked against the provider's own per-generation record, which is the
+    # only source that cannot drift.
+    response_ids: list[str] = Field(default_factory=list)
     input_cost: float = 0.0
     output_cost: float = 0.0
     cache_read_cost: float = 0.0
     cache_write_cost: float = 0.0
     total_cost: float = 0.0
 
-    def add_turn(self, usage: dict, total_tokens: int) -> None:
+    def add_turn(self, usage: dict, total_tokens: int,
+                 response_id: str | None = None) -> None:
         """Fold in one pi `message_end` usage object.
 
         `total_tokens` is passed in rather than re-derived: the caller already
         computes it pi's way (totalTokens, else the sum of the parts).
+
+        `response_id` is pi's `message.responseId` — for the OpenAI-compatible
+        APIs (which is how we reach OpenRouter) pi sets it from the stream's
+        chunk `id`, i.e. the provider's generation id. Optional because not
+        every API populates it, and a turn without one must still be counted.
         """
+        if response_id and response_id not in self.response_ids:
+            self.response_ids.append(response_id)
         cost = usage.get("cost") or {}
         self.input_tokens += usage.get("input") or 0
         self.output_tokens += usage.get("output") or 0

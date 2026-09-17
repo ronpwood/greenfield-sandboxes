@@ -8,6 +8,9 @@
 
 # create -> fill -> setup -> observe. Stops at observe by design: teardown is
 # ALWAYS an explicit separate decision, never chained.
+#   just sbx mount <task> [--limit N] [--target NAME]
+# FLAGS forward to create, which records --target; fill pins a named target to
+# its last pushed `just target sync`.
 mount RUN_ID *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail

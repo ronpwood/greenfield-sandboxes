@@ -1,6 +1,7 @@
 # ─── just/sandbox/observe.just — PHASE 5 · OBSERVE ────────────────────────────
 # Make a mounted sandbox watchable from outside without reaching in: start the
-# app (4501) and the trace UI (4600), retarget the HTTPS proxy, print URLs.
+# app (dev server on loopback :4502, Host-rewriting proxy on *:4501) and the
+# trace UI (4600), retarget the HTTPS proxy, print URLs.
 #
 # IMPORTED by the root justfile, not a module: no `set` lines here (the root
 # already owns `set dotenv-load` / `set positional-arguments`, and a duplicate
@@ -30,18 +31,22 @@ observe RUN_ID:
     fi
     HOST="$VM.exe.xyz"
 
-    APP_PORT=4501
+    APP_PORT=4501            # public: the proxy's wildcard bind, what exe.dev forwards to
+    APP_UPSTREAM_PORT=4502   # internal: the app's dev server, loopback only
     OBS_PORT=4600
-    # The app's name and dir come from the HOST checkout's manifest — the VM's
-    # app/ is a clone of this same repo, so the relative dir matches.
-    APP_NAME=$(uv run adws/adw_modules/manifest.py get app.name)
-    APP_REL=$(uv run adws/adw_modules/manifest.py get app.dir)
+    # The app's name and dir come from the run's TARGET (recorded by CREATE):
+    # the VM's app/ is a clone of that target's source.repo, and the target's
+    # manifest declares its relative app.dir.
+    TARGET=$("$RR" get {{RUN_ID}} target)
+    APP_NAME=$(uv run adws/adw_modules/manifest.py --target "$TARGET" get app.name)
+    APP_REL=$(uv run adws/adw_modules/manifest.py --target "$TARGET" get app.dir)
     # The clone target is `app` relative to the exedev user's home, so this is
     # /home/exedev/app/<app.dir> on a stock exeuntu VM. $HOME stays literal
     # here and expands on the VM, not on the host.
     APP_DIR='$HOME/app/'"$APP_REL"
     OBS_DIR='$HOME/app/.claude/skills/sssf/apps/visualizer'
     OBS_DB='$HOME/app/adws/adw_data/sssf.db'
+    PROXY='$HOME/app/sandbox_mount/guest/app_proxy.ts'
 
     echo "── observe {{RUN_ID}} · vm $VM ──────────────────────────────"
 
@@ -56,9 +61,11 @@ observe RUN_ID:
     fi
     echo "[1/6] ssh ok — $HOST"
 
-    # `ss -ltn` column 4 is Local Address:Port. bun binds 0.0.0.0 by default so
-    # a live server shows as *:4501, which the :PORT suffix match catches. The
-    # proxy cannot reach a 127.0.0.1 bind, so this doubles as a bind check.
+    # `ss -ltn` column 4 is Local Address:Port. The dev server is loopback-only
+    # BY DESIGN (127.0.0.1:4502 or [::1]:4502 — bun's default bind, true of
+    # 1.3.x and 1.4.x alike); the proxy is the one wildcard bind (*:4501). The
+    # :PORT suffix match catches both shapes, so this probe says "something
+    # listens on that port", not where — the where is app_proxy.ts's job.
     listening() {
         ssh "$HOST" 'ss -ltn' 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"
     }
@@ -75,31 +82,57 @@ observe RUN_ID:
         return 0
     }
 
-    # ── 1. app on 4501 ────────────────────────────────────────────────────────
+    # ── 1. app: dev server on loopback, proxy on the public port ─────────────
     # Idempotent: observe is safe to re-run, and `just sbx mount` ends here, so a
-    # second call must not stack a second bun on the same port.
+    # second call must not stack a second process on either port.
+    #
+    # TWO processes, by design. bun's HTML dev server carries a DNS-rebinding
+    # guard (DevServer.rs, is_allowed_host_header) that 403s any Host that is not
+    # localhost / *.localhost / an IP literal / its configured hostname, and
+    # <vm>.exe.xyz is none of those. It has no allow-list knob. So the dev server
+    # stays where bun wants it — default loopback bind, live rebundling — on
+    # APP_UPSTREAM_PORT, and sandbox_mount/guest/app_proxy.ts on APP_PORT is the
+    # only wildcard bind on the box, forwarding with Host rewritten to localhost.
+    # That is the one rule the guard can never remove, so this survives bun
+    # releases that a flag would not. See specs/toolchain-unpin-and-drift-visibility.md.
+    #
+    # The listening() guard below means a re-run NEVER restarts a live server,
+    # so the dev server here is always the one from mount time. After an ADW
+    # commits, bun's incremental rebundle can serve a broken module graph; use
+    # `just sbx lifecycle refresh <id>` to bounce the dev server alone. That
+    # phase exists precisely so this one can stay idempotent.
     #
     # PER-APP boot command: the current app is a static Bun HTML entry, not a
     # server.ts — PORT must be passed explicitly, since Bun's HTML dev server
     # defaults to :3000. An app swap that isn't a static HTML entry rewrites
-    # `bun index.html` here (same rationale as quality.py's command blocks:
-    # paths are data, commands are stack-specific judgement).
-    echo "[2/6] app  :$APP_PORT"
-    if listening "$APP_PORT"; then
-        echo "       already listening — leaving it alone"
-    else
+    # `bun index.html` below (same rationale as quality.py's command blocks:
+    # paths are data, commands are stack-specific judgement). An app swap that
+    # ships its OWN server sets APP_UPSTREAM_PORT to wherever that server
+    # listens and leaves the proxy alone — the proxy is app-agnostic.
+    echo "[2/6] app  :$APP_PORT (proxy) <- :$APP_UPSTREAM_PORT (dev server)"
+    # start_bg <port> <log basename> <remote cwd> <remote command>
+    # Each port is guarded by listening() separately: a re-run where only the
+    # proxy died restarts only the proxy.
+    start_bg() {
+        local port="$1" log="$2" dir="$3" cmd="$4"
+        if listening "$port"; then
+            echo "       :$port already listening — leaving it alone"
+            return 0
+        fi
         # All three detachment pieces are REQUIRED or ssh never returns: nohup
         # (survive session end), the redirect (release stdout/stderr), and
         # < /dev/null (release stdin). Dropping any one hangs this recipe.
-        ssh "$HOST" "cd $APP_DIR && ( nohup env PORT=$APP_PORT bun index.html > \$HOME/${APP_NAME}-app.log 2>&1 < /dev/null & echo \$! )" \
-            | sed 's/^/       started pid /'
-        if ! wait_listen "$APP_PORT"; then
-            echo "observe: $APP_NAME never bound :$APP_PORT — tail of ~/${APP_NAME}-app.log:" >&2
-            ssh "$HOST" "tail -n 40 \$HOME/${APP_NAME}-app.log" >&2 || true
+        ssh "$HOST" "cd $dir && ( nohup $cmd > \$HOME/$log 2>&1 < /dev/null & echo \$! )" \
+            | sed "s/^/       :$port started pid /"
+        if ! wait_listen "$port"; then
+            echo "observe: nothing bound :$port — tail of ~/$log:" >&2
+            ssh "$HOST" "tail -n 40 \$HOME/$log" >&2 || true
             exit 1
         fi
-        echo "       up"
-    fi
+        echo "       :$port up"
+    }
+    start_bg "$APP_UPSTREAM_PORT" "${APP_NAME}-app.log"   "$APP_DIR"   "env PORT=$APP_UPSTREAM_PORT bun index.html"
+    start_bg "$APP_PORT"          "${APP_NAME}-proxy.log" '$HOME/app' "env PORT=$APP_PORT UPSTREAM=$APP_UPSTREAM_PORT bun $PROXY"
 
     # ── 2. visualizer on 4600 ────────────────────────────────────────────────
     # VERIFIED in the plan: the visualizer EXITS when sssf.db is missing. Check

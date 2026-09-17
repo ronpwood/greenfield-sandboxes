@@ -1,6 +1,9 @@
 # just/sandbox/lifecycle/mod.just — the six phases, in order.
 #
 # create -> fill -> setup -> execute -> observe -> teardown. `just sbx mount`
+# chains the first three plus observe. `refresh` sits beside observe as 5b: it
+# bounces ONLY the app dev server, for when an ADW's commit landed under the
+# running watcher and bun's incremental rebundle served a broken bundle.
 # chains the first three plus observe; these exist for when you need one on its
 # own — a re-run of setup after fixing a gate failure, a second execute, a
 # teardown you decided on deliberately.
@@ -18,6 +21,7 @@ import 'fill.just'
 import 'setup.just'
 import 'execute.just'
 import 'observe.just'
+import 'refresh.just'
 import 'teardown.just'
 
 # list the lifecycle phases

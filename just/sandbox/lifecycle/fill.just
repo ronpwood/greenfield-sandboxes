@@ -17,15 +17,38 @@ fill RUN_ID *SHA:
     RR="sandbox_mount/host/run_record.py"
 
     # Public repo: no auth, no GitHub integration, no exe.dev git integration.
-    # The URL comes from the HOST checkout's app.manifest.yaml (source.repo) —
-    # the clone target's own manifest is irrelevant at fill time. A failed
-    # lookup exits non-zero and `set -e` kills the recipe here, before any ssh.
-    REPO=$(uv run adws/adw_modules/manifest.py get source.repo)
+    # The URL is the source.repo of the run's TARGET, which CREATE recorded:
+    # `default` reads the host checkout's app.manifest.yaml, a named target reads
+    # targets/<name>.yaml. The clone target's own manifest is irrelevant at fill
+    # time. A failed lookup exits non-zero and `set -e` kills the recipe here,
+    # before any ssh.
+    TARGET=$("$RR" get {{RUN_ID}} target)
+    REPO=$(uv run adws/adw_modules/manifest.py --target "$TARGET" get source.repo)
 
     # *SHA is variadic: it interpolates to "" when unpinned, space-joined otherwise.
     # Only the first token is meaningful; extra words are a caller mistake we ignore.
     SHA_ARGS="{{SHA}}"
     PIN="${SHA_ARGS%% *}"
+
+    # A named target with no explicit SHA pins to its last PUSHED sync
+    # (`just target sync <name> --push` writes .sandbox/targets/<name>.json), so
+    # every arm of a fan-out starts from the same bytes even if a sync lands
+    # mid-run. An explicit SHA still wins. An unpushed sync can't be cloned, so it
+    # warns and runs unpinned rather than failing.
+    SYNC_JSON=".sandbox/targets/$TARGET.json"
+    if [ -z "$PIN" ] && [ "$TARGET" != "default" ] && [ -f "$SYNC_JSON" ]; then
+        read -r SYNC_PUSHED SYNC_SHA SYNC_AT < <(python3 -c '
+    import json, sys
+    d = json.load(open(sys.argv[1]))
+    print("true" if d.get("pushed") else "false", d.get("target_sha") or "-", d.get("synced_at") or "-")
+    ' "$SYNC_JSON")
+        if [ "$SYNC_PUSHED" = "true" ] && [ "$SYNC_SHA" != "-" ]; then
+            PIN="$SYNC_SHA"
+            echo "==> fill: pin from last sync: $PIN ($SYNC_AT)"
+        else
+            echo "WARN: $SYNC_JSON records an unpushed sync ($SYNC_SHA) — a VM can't clone it; running unpinned" >&2
+        fi
+    fi
 
     VM=$("$RR" get {{RUN_ID}} vm_name)
     if [ -z "$VM" ]; then
@@ -34,7 +57,7 @@ fill RUN_ID *SHA:
     fi
     HOST="$VM.exe.xyz"   # all *.exe.xyz share one host key; the wildcard known_hosts entry is installed
 
-    echo "==> fill: $VM — cloning app/ ${PIN:+(pin $PIN)}"
+    echo "==> fill: $VM — cloning app/ from $REPO (target $TARGET) ${PIN:+(pin $PIN)}"
 
     # One remote script over stdin instead of a quoted one-liner: nothing here has
     # to survive two layers of shell quoting. Progress goes to stderr so stdout

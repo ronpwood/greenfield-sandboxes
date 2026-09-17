@@ -14,6 +14,7 @@ set dotenv-load
 
 import 'list.just'
 import 'harvest.just'
+import 'traces.just'
 import 'reap.just'
 
 # list the management commands

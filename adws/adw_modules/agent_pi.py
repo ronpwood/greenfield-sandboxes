@@ -302,7 +302,11 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
                     usage = message.get("usage", {}) or {}
                     turn = _context_tokens(usage)
                     result.tokens += turn
-                    result.usage.add_turn(usage, turn)
+                    # Captured for EVERY assistant turn, aborted and errored
+                    # ones included: a turn that burns tokens and then fails
+                    # still bills, and those are precisely the turns the trace
+                    # has been losing.
+                    result.usage.add_turn(usage, turn, message.get("responseId"))
                     # Occupancy is read off the last VALID assistant turn, the
                     # way pi does it — an aborted or errored turn reports usage
                     # you can't trust, so it must not overwrite a good reading.

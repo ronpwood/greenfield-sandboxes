@@ -1,9 +1,17 @@
-# sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
-# v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
+# sssf.gemniflash.config.yaml — pure gemniflash: one model, five lanes.
+# Known as: the gemniflash roster, pure gemniflash. Same file.
+#
+# Everything runs on gemniflash-3.8-flash for best-of-N: any
+# quality difference against another roster is pure model, never casting.
+# Nothing but the roster changes. Same ADW scripts, same prompts, same gates,
+# same trace: swapping this file in is the whole migration.
+#
+#   uv run adws/adw_plan_build_test.py "<request>" \
+#     --config adws/adw_sssf_config/sssf.gemniflash.config.yaml
 defaults:
   coding_agent: pi
-  model: openrouter/deepseek/deepseek-v4-flash-0731   # provider/id — provider half is the pi provider name
-  thinking: medium                 # off | minimal | low | medium | high | xhigh | max
+  model: openrouter/google/gemini-3.8-flash   # provider/id — provider half is the pi provider name
+  thinking: high                   # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []          # pi extensions loaded into the harness (-e)
   # Roster-wide allowlist; any agent may override with its own list.
   # NOTE: --tools filters extension and custom tools too, not just builtins. An agent
@@ -34,13 +42,12 @@ defaults:
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
 observability:
-  db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
+  db: adws/adw_data/sssf.db        # same db as the default roster — runs sit side by side
   poll_ms: 500                     # visualizer live-poll cadence
 
 agents:
   - name: planner
-    model: openrouter/google/gemini-3.8-flash
-    thinking: high
+    # inherits the default model — everything here is gemniflash, that is the point
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.
     prompt_engineering:
@@ -61,28 +68,6 @@ agents:
       - subagent_continue
       - subagent_list
       - subagent_remove
-
-  - name: test_designer
-    thinking: high                 # roster-default model on purpose: whether test design
-                                   # needs a frontier model is a question the five-roster
-                                   # fan-out answers empirically, not config
-    color: "#34d399"
-    purpose: Turn the plan's requirements into an executable test file that fails until the build satisfies it; touch nothing else.
-    prompt_engineering:
-      system: adws/adw_data/prompt_engineering/test_designer/system.md
-      user: adws/adw_data/prompt_engineering/test_designer/user.md
-    writes:                        # exactly one lane. NOT "tests/generated/" with a bare
-                                   # trailing slash: permissions._matches checks the "/"
-                                   # prefix branch BEFORE the glob branch, so a pattern with
-                                   # both "*" and a trailing "/" would literal-match nothing.
-      - apps/*/tests/generated/**
-    tools:                         # reads the plan and the code; writes only its suite —
-      - read                       # no edit, so it cannot "help" the fixed suite
-      - grep
-      - find
-      - ls
-      - bash
-      - write
 
   - name: builder
     color: "#22d3ee"
@@ -127,8 +112,6 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openrouter/z-ai/glm-5.3
-    thinking: high
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
     prompt_engineering:
@@ -145,7 +128,6 @@ agents:
       - write
 
   - name: documenter
-    model: openrouter/openai/gpt-5.6-luna
     color: "#e879f9"
     purpose: Write up the change that was just made, from the diff; document only.
     prompt_engineering:

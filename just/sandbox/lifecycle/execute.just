@@ -99,3 +99,9 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     "$RR" set {{RUN_ID}} pid="$PID"
     echo "→ pid $PID recorded; SDLC is running detached"
     echo "→ watch it:  just sbx run cmd {{RUN_ID}} 'tail -f run.log'"
+    # The dev server serving the review URL was started at MOUNT time, before
+    # this ADW ran, and observe deliberately will not restart it. When the
+    # commit lands, bun rebundles incrementally and can serve a broken module
+    # graph — see just/sandbox/lifecycle/refresh.just. This cannot be chained
+    # here: execute is DETACHED and returns now, minutes before the ADW ends.
+    echo "→ then review: just sbx lifecycle refresh {{RUN_ID}}   (fresh bundle; do this AFTER it finishes)"
