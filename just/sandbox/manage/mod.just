@@ -17,6 +17,7 @@ import 'harvest.just'
 import 'traces.just'
 import 'trace_metrics.just'
 import 'snapshot.just'
+import 'shot.just'
 import 'reap.just'
 
 # list the management commands

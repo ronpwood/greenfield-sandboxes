@@ -42,7 +42,7 @@ reap *FLAGS:
     # this needs an `offset` loop.
     curl -sS --max-time 30 "$API/keys" -H "Authorization: Bearer $OPENROUTER_PROVISIONING_KEY" > "$TMPD/keys.json" \
         || { echo "!! could not list keys"; exit 1; }
-    ssh "${SSH_OPTS[@]}" exe.dev ls --json > "$TMPD/vms.json" 2>/dev/null || echo '{"vms":[]}' > "$TMPD/vms.json"
+    ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null > "$TMPD/vms.json" 2>/dev/null || echo '{"vms":[]}' > "$TMPD/vms.json"
 
     # Selection in python (stdlib, same reason run_record.py is): three-way join of
     # key list x vm list x run records is not a thing to write in jq.

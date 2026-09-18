@@ -177,5 +177,8 @@ fill RUN_ID *SHA:
         | ssh "$HOST" 'umask 077 && cat > app/.env && chmod 600 app/.env'
 
     # Prove it landed without ever printing it back. exeuntu is Ubuntu, so GNU stat.
-    ENV_STAT=$(ssh "$HOST" 'stat -c "%a %s" app/.env')
+    # `< /dev/null` on the LOCAL ssh — see create.just. Without it THIS call is the
+    # one that eats a fan-out loop's arm list, because it is fill's only ssh that
+    # neither takes a heredoc nor is fed by a pipe.
+    ENV_STAT=$(ssh "$HOST" 'stat -c "%a %s" app/.env' < /dev/null)
     echo "==> fill: app/.env written (mode/size: $ENV_STAT) — provisioning key never left the host"

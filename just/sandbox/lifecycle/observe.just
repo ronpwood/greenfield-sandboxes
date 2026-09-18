@@ -55,7 +55,10 @@ observe RUN_ID:
     # "not listening" rather than "ssh is broken". All *.exe.xyz share one host
     # key and a wildcard known_hosts entry is already installed, so this is
     # non-interactive.
-    if ! ssh "$HOST" 'true' >/dev/null 2>&1; then
+    # `< /dev/null` on every LOCAL ssh below — see create.just. The redirects already
+    # inside the nohup command strings detach the REMOTE process; these detach ssh
+    # itself from the caller's stdin, which is what keeps a fan-out loop alive.
+    if ! ssh "$HOST" 'true' < /dev/null >/dev/null 2>&1; then
         echo "observe: cannot ssh $HOST — VM left up for debugging" >&2
         exit 1
     fi
@@ -67,7 +70,7 @@ observe RUN_ID:
     # :PORT suffix match catches both shapes, so this probe says "something
     # listens on that port", not where — the where is app_proxy.ts's job.
     listening() {
-        ssh "$HOST" 'ss -ltn' 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"
+        ssh "$HOST" 'ss -ltn' < /dev/null 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"
     }
 
     # Poll rather than sleep-a-guess: bun is up in well under a second warm, but
@@ -122,11 +125,11 @@ observe RUN_ID:
         # All three detachment pieces are REQUIRED or ssh never returns: nohup
         # (survive session end), the redirect (release stdout/stderr), and
         # < /dev/null (release stdin). Dropping any one hangs this recipe.
-        ssh "$HOST" "cd $dir && ( nohup $cmd > \$HOME/$log 2>&1 < /dev/null & echo \$! )" \
+        ssh "$HOST" "cd $dir && ( nohup $cmd > \$HOME/$log 2>&1 < /dev/null & echo \$! )" < /dev/null \
             | sed "s/^/       :$port started pid /"
         if ! wait_listen "$port"; then
             echo "observe: nothing bound :$port — tail of ~/$log:" >&2
-            ssh "$HOST" "tail -n 40 \$HOME/$log" >&2 || true
+            ssh "$HOST" "tail -n 40 \$HOME/$log" < /dev/null >&2 || true
             exit 1
         fi
         echo "       :$port up"
@@ -139,7 +142,7 @@ observe RUN_ID:
     # for the db before spending a start attempt, so the error names the real
     # cause instead of showing an empty port.
     echo "[3/6] obs  :$OBS_PORT"
-    if ! ssh "$HOST" "test -f $OBS_DB"; then
+    if ! ssh "$HOST" "test -f $OBS_DB" < /dev/null; then
         echo "observe: $OBS_DB is missing on $VM." >&2
         echo "         The visualizer exits immediately without it. That db is created by" >&2
         echo "         sandbox_mount/guest/provision.sh (step 8, 'trace db') — re-run SETUP:" >&2
@@ -154,11 +157,11 @@ observe RUN_ID:
         # the assignment lands in its environment and bun inherits it.
         # The db path is passed explicitly because it resolves against the
         # server's cwd, and the server runs from the visualizer app dir.
-        ssh "$HOST" "cd $OBS_DIR && ( SSSF_DB=$OBS_DB nohup bun run server/index.ts > \$HOME/visualizer.log 2>&1 < /dev/null & echo \$! )" \
+        ssh "$HOST" "cd $OBS_DIR && ( SSSF_DB=$OBS_DB nohup bun run server/index.ts > \$HOME/visualizer.log 2>&1 < /dev/null & echo \$! )" < /dev/null \
             | sed 's/^/       started pid /'
         if ! wait_listen "$OBS_PORT"; then
             echo "observe: visualizer never bound :$OBS_PORT — tail of ~/visualizer.log:" >&2
-            ssh "$HOST" 'tail -n 40 $HOME/visualizer.log' >&2 || true
+            ssh "$HOST" 'tail -n 40 $HOME/visualizer.log' < /dev/null >&2 || true
             echo "         If it says 'sssf.db not found', SETUP did not initialize the trace db:" >&2
             echo "           sandbox_mount/guest/provision.sh  ->  just sbx lifecycle setup {{RUN_ID}}" >&2
             exit 1
@@ -171,8 +174,8 @@ observe RUN_ID:
     # >= 1024); without this retarget https://$HOST/ hits nothing. set-public
     # applies to the primary port only — see the note printed at the end.
     echo "[4/6] proxy -> :$APP_PORT, public"
-    ssh exe.dev share port "$VM" "$APP_PORT"
-    ssh exe.dev share set-public "$VM"
+    ssh exe.dev share port "$VM" "$APP_PORT" < /dev/null
+    ssh exe.dev share set-public "$VM" < /dev/null
 
     # ── 4. record ────────────────────────────────────────────────────────────
     echo "[5/6] recording ports"

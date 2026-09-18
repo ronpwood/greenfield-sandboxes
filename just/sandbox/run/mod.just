@@ -39,7 +39,12 @@ cmd RUN_ID +CMD:
     # {{CMD}} is interpolated verbatim rather than rebuilt from "$@" on purpose:
     # this is an escape hatch, so the pipes, globs and quotes you typed are meant
     # to reach the remote shell intact. `cd app` matches where FILL clones.
-    ssh "$VM".exe.xyz "cd app && {{CMD}}"
+    # `< /dev/null` on the LOCAL ssh: `run cmd` is the recipe most likely to be
+    # called from a `while read ... done < arms.tsv` loop, and without this the
+    # first call swallows the rest of the arm list and the loop runs exactly once.
+    # The pipes and globs in {{CMD}} still reach the REMOTE shell intact; this only
+    # detaches ssh from the caller's stdin, which was never an input to the command.
+    ssh "$VM".exe.xyz "cd app && {{CMD}}" < /dev/null
 
 # usage: just sbx run agent <run-id> "remember the number 42, reply STORED"
 #        just sbx run agent <run-id> "what number did I ask you to remember?"

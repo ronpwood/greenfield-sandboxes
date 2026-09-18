@@ -89,23 +89,25 @@ refresh RUN_ID:
 
     echo "── refresh {{RUN_ID}} · vm $VM ──────────────────────────────"
 
-    if ! ssh "$HOST" 'true' >/dev/null 2>&1; then
+    # `< /dev/null` on every LOCAL ssh below — see create.just. refresh runs once
+    # per arm in a fan-out, so an undetached ssh here eats the arm list too.
+    if ! ssh "$HOST" 'true' < /dev/null >/dev/null 2>&1; then
         echo "refresh: cannot ssh $HOST — VM left up for debugging" >&2
         exit 1
     fi
     echo "[1/5] ssh ok — $HOST"
 
     listening() {
-        ssh "$HOST" 'ss -ltn' 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"
+        ssh "$HOST" 'ss -ltn' < /dev/null 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"
     }
 
     # ── 1. stop every dev server ─────────────────────────────────────────────
     # Every one, not "the" one: the whole failure mode this guards against is a
     # duplicate that bound a different port and is invisible on 4502.
     echo "[2/5] stopping dev server(s) on :$APP_UPSTREAM_PORT"
-    BEFORE=$(ssh "$HOST" "$COUNT_CMD" || true)
+    BEFORE=$(ssh "$HOST" "$COUNT_CMD" < /dev/null || true)
     echo "       found ${BEFORE:-0} running"
-    ssh "$HOST" "pkill -f '$PATTERN' || true"
+    ssh "$HOST" "pkill -f '$PATTERN' || true" < /dev/null
 
     # Wait for the PORT, not the process: a dying bun can hold the listener for
     # a beat after pkill returns, and starting into that window is exactly how
@@ -118,7 +120,7 @@ refresh RUN_ID:
     if [ -z "$FREED" ]; then
         echo "refresh: :$APP_UPSTREAM_PORT still bound after pkill — refusing to start a second server" >&2
         echo "         (starting now would silently bind the next free port and change nothing)" >&2
-        ssh "$HOST" "pgrep -af '$PATTERN'" >&2 || true
+        ssh "$HOST" "pgrep -af '$PATTERN'" < /dev/null >&2 || true
         exit 1
     fi
     echo "       :$APP_UPSTREAM_PORT free"
@@ -137,7 +139,7 @@ refresh RUN_ID:
     done
     if [ -z "$STARTED" ]; then
         echo "refresh: nothing bound :$APP_UPSTREAM_PORT — tail of ~/${APP_NAME}-app.log:" >&2
-        ssh "$HOST" "tail -n 40 \$HOME/${APP_NAME}-app.log" >&2 || true
+        ssh "$HOST" "tail -n 40 \$HOME/${APP_NAME}-app.log" < /dev/null >&2 || true
         exit 1
     fi
 
@@ -146,15 +148,15 @@ refresh RUN_ID:
     # wrong port and the proxy is still pointed at a corpse — a silent success
     # is the one outcome this phase must never produce.
     echo "[4/5] verifying a single server on :$APP_UPSTREAM_PORT"
-    COUNT=$(ssh "$HOST" "$COUNT_CMD" || true)
+    COUNT=$(ssh "$HOST" "$COUNT_CMD" < /dev/null || true)
     if [ "${COUNT:-0}" != "1" ]; then
         echo "refresh: expected exactly 1 dev server, found ${COUNT:-0}" >&2
-        ssh "$HOST" "pgrep -af '$PATTERN'" >&2 || true
+        ssh "$HOST" "pgrep -af '$PATTERN'" < /dev/null >&2 || true
         exit 1
     fi
-    if ! ssh "$HOST" "grep -q 'localhost:$APP_UPSTREAM_PORT' \$HOME/${APP_NAME}-app.log"; then
+    if ! ssh "$HOST" "grep -q 'localhost:$APP_UPSTREAM_PORT' \$HOME/${APP_NAME}-app.log" < /dev/null; then
         echo "refresh: the dev server did not report :$APP_UPSTREAM_PORT — it may have fallen back:" >&2
-        ssh "$HOST" "head -n 6 \$HOME/${APP_NAME}-app.log" >&2 || true
+        ssh "$HOST" "head -n 6 \$HOME/${APP_NAME}-app.log" < /dev/null >&2 || true
         exit 1
     fi
     echo "       1 process, bound to :$APP_UPSTREAM_PORT"

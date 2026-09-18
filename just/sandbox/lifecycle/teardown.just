@@ -65,7 +65,10 @@ teardown RUN_ID *FLAGS:
     # answer `reap` uses. Verified shape: {"vms":[{"vm_name":"...",...}]}
     VM_ALIVE=0
     if [ -n "$VM" ]; then
-        VM_LIST=$(ssh "${SSH_OPTS[@]}" exe.dev ls --json 2>/dev/null || echo '{"vms":[]}')
+        # `< /dev/null` on every LOCAL ssh in this recipe: without it ssh reads the
+        # CALLER's stdin, and a `while read ... done < arms.tsv` teardown loop runs
+        # exactly ONCE. Separate from redirects inside a remote command string.
+        VM_LIST=$(ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null 2>/dev/null || echo '{"vms":[]}')
         if printf '%s' "$VM_LIST" | VM="$VM" python3 -c \
             'import json,os,sys; sys.exit(0 if os.environ["VM"] in {v.get("vm_name") for v in json.load(sys.stdin).get("vms",[])} else 1)'
         then
@@ -116,12 +119,12 @@ teardown RUN_ID *FLAGS:
         # below is complete. Best-effort: a failed/skipped checkpoint still
         # copies whatever the main file has, same as before this fix existed.
         ssh "${SSH_OPTS[@]}" "$VM".exe.xyz \
-            'cd app 2>/dev/null && python3 -c "import sqlite3; c = sqlite3.connect(\"adws/adw_data/sssf.db\"); c.execute(\"PRAGMA busy_timeout=5000;\"); c.execute(\"PRAGMA wal_checkpoint(FULL);\")" 2>&1' \
+            'cd app 2>/dev/null && python3 -c "import sqlite3; c = sqlite3.connect(\"adws/adw_data/sssf.db\"); c.execute(\"PRAGMA busy_timeout=5000;\"); c.execute(\"PRAGMA wal_checkpoint(FULL);\")" 2>&1' < /dev/null \
             | sed 's/^/   trace db checkpoint: /' || true
         # One round trip, and `ls -d` filters to what actually exists so a run that
         # died before writing app_docs/ is not an error.
         ssh "${SSH_OPTS[@]}" "$VM".exe.xyz \
-            'cd app 2>/dev/null || exit 0; P=$(ls -d specs app_docs adws/adw_data/sssf.db run.log 2>/dev/null); [ -z "$P" ] && exit 0; tar cf - $P' \
+            'cd app 2>/dev/null || exit 0; P=$(ls -d specs app_docs adws/adw_data/sssf.db run.log 2>/dev/null); [ -z "$P" ] && exit 0; tar cf - $P' < /dev/null \
             > "$TAR_TMP" || true
         if [ -s "$TAR_TMP" ]; then
             tar xf "$TAR_TMP" -C "$ART"
@@ -163,7 +166,7 @@ teardown RUN_ID *FLAGS:
     # a stash nobody pops is exactly as lost as never harvesting, and this
     # codebase's gates never guess, they check.
     if [ "$VM_ALIVE" = 1 ] && [ "$FORCE_DIRTY" != 1 ]; then
-        DIRTY=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz 'cd app 2>/dev/null && git status --porcelain 2>/dev/null' || true)
+        DIRTY=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz 'cd app 2>/dev/null && git status --porcelain 2>/dev/null' < /dev/null || true)
         if [ -n "$DIRTY" ]; then
             echo "!! $VM's working tree is dirty — this uncommitted work would be destroyed:"
             echo "$DIRTY" | sed 's/^/!!   /'
@@ -198,7 +201,7 @@ teardown RUN_ID *FLAGS:
 
     # ── 6. destroy the vm -------------------------------------------------------
     if [ "$VM_ALIVE" = 1 ]; then
-        ssh "${SSH_OPTS[@]}" exe.dev rm "$VM" > /dev/null
+        ssh "${SSH_OPTS[@]}" exe.dev rm "$VM" < /dev/null > /dev/null
         echo "   vm: destroyed ($VM)"
     else
         echo "   vm: nothing to destroy"

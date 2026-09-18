@@ -175,6 +175,26 @@ def typecheck(run) -> QualityCheckResult:
     `document` and friends exist. `--skipLibCheck` keeps the cost in this app's
     own code rather than in @types.
     """
+    # Ambient declarations are NOT reachable by import, so tsc never sees them
+    # when it is handed an entry file explicitly — they have to be named on the
+    # command line or they may as well not exist. Without this, an app that does
+    # the idiomatic `import "./styles.css"` fails the gate with TS2882 while
+    # `bun build` accepts it happily, and a build spends one of its three bounded
+    # fix loops on a non-defect. Measured 2026-09-18 on the greenfield shell.
+    # node_modules is excluded deliberately: an installed dependency ships
+    # hundreds of its own .d.ts files (happy-dom alone contributes ~700), and
+    # globbing them onto the command line makes tsc slow and the argv unreadable.
+    # Dependency types are already resolved through imports; what has to be named
+    # here is only the app's OWN ambient declarations, which nothing imports.
+    # Filter on the path RELATIVE to APP_DIR: a `..` in APP_DIR itself starts with
+    # a dot and would otherwise trip the hidden-directory check, silently matching
+    # nothing at all.
+    _app = Path(APP_DIR)
+    declarations = sorted(
+        str(p) for p in _app.rglob("*.d.ts")
+        if not any(part == "node_modules" or part.startswith(".")
+                   for part in p.relative_to(_app).parts)
+    )
     return _run(QualityCheckSpec(
         name="typecheck",
         area="frontend",
@@ -183,7 +203,7 @@ def typecheck(run) -> QualityCheckResult:
               "--noEmit", "--skipLibCheck", "--strict", "false",
               "--target", "es2022", "--module", "esnext",
               "--moduleResolution", "bundler", "--allowImportingTsExtensions",
-              "--lib", "es2022,dom,dom.iterable", ENTRY],
+              "--lib", "es2022,dom,dom.iterable", *declarations, ENTRY],
     ), run)
 
 
@@ -229,19 +249,36 @@ def run_tests(run, extra_files: list[str] | None = None) -> QualityResult:
 
 
 def run_verify(run, extra_files: list[str] | None = None) -> QualityResult:
-    """Typecheck, then tests, as one QualityResult.
+    """Lint, typecheck, then tests, as one QualityResult.
 
     This is what the SDLC chains call where they used to call `run_tests`. Order
-    matters: a type error is cheaper to read than a runtime failure caused by the
-    same mistake, and both are collected either way, so a fix loop gets the whole
-    picture in one pass rather than one gate per iteration.
+    is cheapest-signal-first: lint and type errors are easier to read than a
+    runtime failure caused by the same mistake, and all three are collected
+    either way, so a fix loop gets the whole picture in one pass rather than one
+    gate per iteration.
 
-    Both blocks always run — this deliberately does NOT short-circuit on a failed
-    typecheck. A builder handed "15 type errors AND these 3 failing tests" can fix
-    them together; handed them one gate at a time it spends a bounded fix loop per
-    gate. `run_tests` stays as it was for the chains that only want the suite.
+    All three blocks always run — this deliberately does NOT short-circuit. A
+    builder handed "these lint errors AND 15 type errors AND 3 failing tests" can
+    fix them together; handed them one gate at a time it spends a bounded fix
+    loop per gate. `run_tests` stays as it was for the chains that only want the
+    suite.
+
+    `lint` runs oxlint's DEFAULT rules, which every tree passes today — the
+    greenfield shell, the default payload app, and all four 2026-09-18 arms. It is
+    here for the ordinary lint errors the TDD chain never checked, not as a crash
+    gate.
+
+    It deliberately does NOT enable `typescript/no-explicit-any`, though that was
+    the original reason for adding lint: both 2026-09-18 browser crashes hid
+    behind an explicit `any` (`h(): any`, `Map<string, any>`), which defeats tsc
+    in strict and non-strict mode identically. Measured before deciding — the
+    rule WOULD have flagged both crashed arms (55 and 5 errors), but it also
+    flags the arm that worked and shipped (6) and the default payload app (2).
+    A gate that fails working code to catch a hazard that `happy-dom` now
+    catches directly is a bad trade, so it stays off. Revisit only if a future
+    crash slips past the fixed suite.
     """
-    checks = [typecheck(run), tests(run, extra_files)]
+    checks = [lint(run), typecheck(run), tests(run, extra_files)]
     failures = [
         f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
         for check in checks if not check.passed

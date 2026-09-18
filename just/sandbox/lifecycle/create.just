@@ -97,7 +97,12 @@ create RUN_ID *FLAGS:
     # `reap` and `list` select by run record. App-neutral on purpose: this file
     # is synced into target repos, where an app name would be a leak.
     echo "vm:      creating $RUN_ID (ssh exe.dev new --tag sssf) ..."
-    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag sssf --json)"
+    # `< /dev/null` on the LOCAL ssh: without it ssh reads the CALLER's stdin, so a
+    # `while read ... done < arms.tsv` fan-out loop around this recipe runs exactly
+    # ONCE — the first ssh swallows the rest of the file and the loop sees EOF.
+    # This is separate from any `< /dev/null` inside a remote command string, which
+    # only detaches the remote process. Both are needed. (Cost 3 arms on 2026-09-18.)
+    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag sssf --json < /dev/null)"
 
     # The exact key names of `new --json` are UNVERIFIED (only `ls --json` was
     # observed: {"vms":[{vm_name,https_url,ssh_dest,...}]}). Accept the shapes we
@@ -122,7 +127,7 @@ create RUN_ID *FLAGS:
     # Fallback on an unrecognised payload: ask the one shape that IS verified.
     if [ -z "${VM_NAME:-}" ]; then
         echo "vm:      'new --json' shape unrecognised, re-reading from 'ls --json'"
-        PARSED="$(ssh exe.dev ls "$RUN_ID" --json | python3 -c '
+        PARSED="$(ssh exe.dev ls "$RUN_ID" --json < /dev/null | python3 -c '
     import json, sys
     want = sys.argv[1]
     vms = (json.load(sys.stdin) or {}).get("vms") or []
@@ -206,7 +211,7 @@ create RUN_ID *FLAGS:
     READY=0
     BACKOFF=2
     while [ "$SECONDS" -lt "$DEADLINE" ]; do
-        if ssh -o BatchMode=yes -o ConnectTimeout=5 "$VM_NAME.exe.xyz" true >/dev/null 2>&1; then
+        if ssh -o BatchMode=yes -o ConnectTimeout=5 "$VM_NAME.exe.xyz" true < /dev/null >/dev/null 2>&1; then
             READY=1; break
         fi
         sleep "$BACKOFF"

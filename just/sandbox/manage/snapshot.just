@@ -37,8 +37,15 @@ snapshot RUN_ID *REASON:
 
     # `|| true` so a non-zero exit is CLASSIFIED below instead of killing the
     # recipe under `set -e` — exit 2 (wrong branch) is a message, not a crash.
+    # `ssh host cmd a b c` does NOT pass argv — it JOINS the arguments into one
+    # string that the REMOTE shell re-splits on whitespace. A multi-word reason
+    # therefore arrives as several positionals and the script sees only its first
+    # word (observed 2026-09-18: "review_2 rejected: ..." landed as "review_2").
+    # printf %q quotes it so the remote shell reassembles exactly one argument.
+    # fill.just documents the same trap for its own clone arguments.
+    Q_REASON=$(printf '%q' "$REASON")
     set +e
-    OUT=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz bash -s -- app "$RUN_ID" "$REASON" \
+    OUT=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz "bash -s -- app $(printf '%q' "$RUN_ID") $Q_REASON" \
             < sandbox_mount/guest/snapshot_run_branch.sh 2>&1)
     RC=$?
     set -e

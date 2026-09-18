@@ -9,8 +9,8 @@
 # The 2026-09-17 hypothesis it tests: a team can have a good plan and still miss if the
 # builder is weak. That run's plan carried 23 concrete, checkable requirements and the
 # build still shipped a render crash while losing most of its time to malformed `edit`
-# calls. Run beside the asymmetric roster, it shows which seat — plan+review or build —
-# buys more rubric score per dollar.
+# calls. Run beside the asymmetric roster, it isolates which seat — plan+review or
+# build — the marginal capability belongs in.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
   coding_agent: pi

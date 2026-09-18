@@ -21,10 +21,20 @@ moving under it.
 
 Error kinds are classified from the tool's own message text, not guessed:
 
-    schema     "Validation failed for tool ..."   the CALL was malformed
-    not-found  "Could not find the exact text"    oldText did not match the file
-    no-op      "No changes made"                  the edit changed nothing
-    other      anything else, printed so it can be classified later
+    model-format  the model emitted malformed structured output
+    schema        "Validation failed for tool ..."  the CALL was malformed
+    not-found     "Could not find the exact text"   oldText did not match the file
+    no-op         "No changes made"                 the edit changed nothing
+    other         anything else, printed so it can be classified later
+
+`model-format` is split out from `schema` because THEY HAVE DIFFERENT OWNERS. A
+schema error is the model misusing a tool it was told how to use — a prompt can
+fix that, and the 2026-09-18 tool-contract change cut those from 18 to 0-2 per
+arm. A model-format error is the model's own function-calling serialization
+breaking: on gf2-1, deepseek leaked its native markup into a JSON argument value
+and invented a tool named `content` out of the same mangled parse. No prompt
+fixes that; it is a provider bug. Folding the two together makes a prompt change
+look less effective than it was, and sends a provider bug to the wrong owner.
 
 Usage:
     trace_metrics.py <traces-dir> [--json]
@@ -48,16 +58,30 @@ END_EVENT = "tool_execution_end"
 # Ordered longest-lived first; the first match wins, so keep these mutually
 # exclusive in practice and let anything unrecognised fall through to "other"
 # rather than being silently folded into a neighbouring kind.
+# ORDER MATTERS: model-format is checked FIRST, because its symptoms arrive
+# through the ordinary schema validator — a corrupted argument is still reported
+# as "Validation failed for tool ...". Checking schema first swallows every one.
 ERROR_KINDS = (
-    ("schema", "Validation failed for tool"),
-    ("not-found", "Could not find the exact text"),
-    ("no-op", "No changes made"),
+    ("model-format", ("DSML", "Tool content not found")),
+    ("schema", ("Validation failed for tool",)),
+    ("not-found", ("Could not find the exact text", "Could not find edits[")),
+    ("no-op", ("No changes made",)),
 )
 
+# A tool name the registry never defined means the model hallucinated it, which
+# is the same serialization failure wearing a different hat.
+KNOWN_TOOLS = {"bash", "read", "write", "edit", "ls", "grep", "find", "glob",
+               "subagent_create", "subagent_continue", "subagent_list",
+               "subagent_remove"}
 
-def classify(text: str) -> str:
-    for kind, needle in ERROR_KINDS:
-        if needle in text:
+
+def classify(text: str, tool: str = "") -> str:
+    # An unknown tool name is a model-format failure whatever the message says:
+    # the registry is fixed, so the model invented the name.
+    if tool and tool not in KNOWN_TOOLS and tool != "<unnamed>":
+        return "model-format"
+    for kind, needles in ERROR_KINDS:
+        if any(n in text for n in needles):
             return kind
     return "other"
 
@@ -113,7 +137,7 @@ def scan_agent(path: Path) -> dict:
 
             errors += 1
             per_tool_errors[name] = per_tool_errors.get(name, 0) + 1
-            kind = classify(error_text(event))
+            kind = classify(error_text(event), name)
             per_kind[kind] = per_kind.get(kind, 0) + 1
             # Keep one example per kind: a bare count of "other" is not
             # actionable, and the first line of the message usually names it.

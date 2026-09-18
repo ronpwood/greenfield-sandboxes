@@ -19,7 +19,7 @@ list:
     RECORDS="$(sandbox_mount/host/run_record.py list 2>/dev/null || echo '[]')"
     # One control-plane call, not one per run. "unknown" is distinct from "gone":
     # a failed lookup must never read as "every VM is destroyed".
-    LIVE="$(ssh -o BatchMode=yes -o ConnectTimeout=15 exe.dev ls --json 2>/dev/null \
+    LIVE="$(ssh -o BatchMode=yes -o ConnectTimeout=15 exe.dev ls --json < /dev/null 2>/dev/null \
             | jq -r '[.vms[].vm_name] | join(",")' 2>/dev/null)"
     LIVE="${LIVE:-__unknown__}"
     printf '%s' "$RECORDS" | sandbox_mount/host/runs_table.py "$LIVE"
