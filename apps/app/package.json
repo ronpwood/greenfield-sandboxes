@@ -1,0 +1,8 @@
+{
+  "name": "app",
+  "private": true,
+  "//": "Test-only. happy-dom is a DOM implementation for `bun test`; nothing here is bundled into the app, so the brief's 'no frameworks' constraint is untouched. provision.sh runs `bun install` for apps/*/ automatically when this file exists.",
+  "devDependencies": {
+    "happy-dom": "^15.11.6"
+  }
+}

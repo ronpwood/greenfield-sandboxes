@@ -3,31 +3,50 @@
 // is expected to grow durable tests for it here (generated TDD suites live
 // separately in tests/generated/ and are red by design until built).
 //
-// ── The render smoke, and your obligation to it ──────────────────────────────
-// `bun test` has no DOM, so main.ts's module-scope render is skipped unless
-// something provides `document`. The stub below is that something, and it is
-// why "renders into #app on import" executes the REAL render path instead of
-// just proving the file parses. The typecheck gate catches undeclared names and
-// wrong types; it cannot catch code that type-checks and then throws while
-// drawing. This test is what catches that.
+// ── Why this file uses happy-dom, and what that buys you ─────────────────────
+// `bun test` has no DOM, so main.ts's module-scope render would never execute
+// under test. This file installs a REAL DOM implementation (happy-dom) before
+// the first import of ./main.ts, so "renders into #app on import" exercises the
+// actual render path.
 //
-// It only exercises what it implements. When the UI grows — createElement,
-// SVG, appendChild, addEventListener — EXTEND THIS STUB so the render path
-// keeps running under test. Do not delete this test, and do not weaken it into
-// a tautology, to make a suite go green: a vacuous smoke test is worse than
-// none, because it reports the crash it is no longer looking for as a pass.
+// It deliberately replaced a hand-rolled stub, which caused two shipped browser
+// crashes on 2026-09-18. A hand-rolled double is an attractive nuisance: it
+// looks like a DOM, so agents code against it — including against its internals,
+// which do not exist in a browser. One arm called `el.classNameSet.add(...)` (an
+// implementation detail of the old stub); another ran
+// `Object.defineProperty(globalThis, "document", ...)` in main.ts to cooperate
+// with it. Both passed `bun test` and both threw on page load.
 //
-// The stub is installed at module scope, before any import of ./main.ts, on
-// purpose: a module body runs once on first import, so the first import wins.
-// Keep every import of ./main.ts dynamic (`await import`) and below this point.
+// happy-dom removes that whole class of bug, because THE TEST FAILS THE SAME WAY
+// THE BROWSER DOES. Verified against both crashed arms: their real main.ts files
+// now fail here with the exact errors the browser reported.
+//
+// TWO RULES, and they are the point of this file:
+//   1. NEVER reference test-only identifiers from production code. If a property
+//      is not on the real DOM, it is not yours to call. `document`, `Element`
+//      and friends behave here as they do in a browser — use them.
+//   2. NEVER weaken this file to make a suite pass. Extend it, or fix the code.
+//      A render test that cannot fail is worse than none, because it reports the
+//      crash it has stopped looking for as a pass.
 
 import { describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 
-const appEl = { textContent: "" };
+const win = new Window({ url: "http://localhost/" });
 
-(globalThis as any).document = {
-  getElementById: (id: string) => (id === "app" ? appEl : null),
-};
+// `configurable: false` is load-bearing and matches a real browser, where
+// `window.document` cannot be redefined. Without it, production code that calls
+// Object.defineProperty(globalThis, "document", ...) would pass here and throw
+// on page load — which is exactly how one arm shipped a crash.
+Object.defineProperty(globalThis, "document", {
+  value: win.document,
+  configurable: false,
+  writable: false,
+  enumerable: true,
+});
+(globalThis as unknown as { window: unknown }).window = win;
+
+document.body.innerHTML = `<div id="app"></div>`;
 
 describe("shell", () => {
   test("module graph loads", async () => {
@@ -37,8 +56,10 @@ describe("shell", () => {
 
   test("renders into #app on import", async () => {
     await import("./main.ts");
-    // main.ts writes to #app at module scope. Empty means the render path
-    // never ran — either the stub no longer satisfies it, or rendering broke.
-    expect(appEl.textContent).not.toBe("");
+    // main.ts writes to #app at module scope. Empty means the render path never
+    // ran — either the entry stopped rendering, or rendering threw.
+    const app = document.getElementById("app");
+    expect(app).not.toBeNull();
+    expect(app!.textContent).not.toBe("");
   });
 });
