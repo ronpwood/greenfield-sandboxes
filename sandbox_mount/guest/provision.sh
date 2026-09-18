@@ -115,6 +115,30 @@ say "bun $(bun --version) (${mode}, baseline ${want})"
 want="$(lock_want just)"; mode="$(lock_mode just)"
 step "3/9 just (${mode} ${want})"
 just_version() { just --version 2>/dev/null | awk '{print $2}'; }
+
+# install.sh fetches the binary from github.com/casey/just/releases, and GitHub
+# rate-limits release-asset downloads BY SOURCE IP. Every exe.dev VM leaves
+# through the same egress, so a fan-out is N simultaneous unauthenticated
+# fetches from one address: a six-way mount took a 403 on three arms, and a
+# serialised retry 20s later still took two. bun is unaffected — bun.sh serves
+# its own CDN. Retry with backoff rather than pinning a mirror: the block is
+# transient (the same URL answered 302 minutes later) and a mirror is a second
+# thing to trust. Bounded, so a genuinely bad tag still fails the provision.
+just_install() {   # "$@" = extra args for install.sh
+  local try delay=5
+  for try in 1 2 3 4; do
+    if curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+         | sudo bash -s -- --to /usr/local/bin "$@"; then
+      return 0
+    fi
+    [[ $try -lt 4 ]] || break
+    say "install failed (attempt ${try}/4) — GitHub rate-limits release assets per IP; retrying in ${delay}s"
+    sleep "$delay"; delay=$(( delay * 3 ))
+  done
+  echo "[provision] just: install.sh failed 4 times (last delay ${delay}s)" >&2
+  return 1
+}
+
 case "$mode" in
   pin)
     if [[ "$(just_version || true)" == "$want" ]]; then
@@ -125,8 +149,7 @@ case "$mode" in
       fi
       # `--tag` is the installer's own version argument; `--force` lets it
       # overwrite the binary a previous provision left in /usr/local/bin.
-      curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-        | sudo bash -s -- --tag "$want" --to /usr/local/bin --force
+      just_install --tag "$want" --force
       say "installed ${want}"
     fi
     ;;
@@ -134,8 +157,7 @@ case "$mode" in
     if command -v just >/dev/null 2>&1; then
       say "already installed — leaving it alone"
     else
-      curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-        | sudo bash -s -- --to /usr/local/bin
+      just_install
       say "installed latest"
     fi
     ;;
@@ -201,11 +223,26 @@ say "wrote $HOME/.pi/agent/models.json ($(grep -c '"id"' "$HOME/.pi/agent/models
 # apps/*/ instead of naming the app: `apps/` holds exactly one payload by
 # convention (`just app swap` archives first), and a glob costs nothing here
 # where a guest-side manifest read would cost a pyyaml fetch.
+#
+# --frozen-lockfile when a lock is COMMITTED, and it is load-bearing twice over.
+# A plain `bun install` rewrites the lockfile whenever the guest's bun differs
+# from whichever bun wrote it — the greenfield shell's lock was authored by the
+# host's bun 1.3.0, and the guest's 1.4.2 adds a `"configVersion": 0` line. That
+# is a one-line diff, and it dirtied the tree, and gate A (git integrity) failed
+# every arm of a six-way fan-out before a single agent ran. Frozen also gets the
+# property the committed lock exists for: every arm resolves the EXACT same
+# dependency set, and a lock that genuinely no longer satisfies package.json
+# fails here, loudly, instead of being silently rewritten into agreement.
 step "5/9 bun install"
 for dir in apps/*/ .claude/skills/sssf/apps/visualizer; do
   if [[ -f "$dir/package.json" ]]; then
-    ( cd "$dir" && bun install )
-    say "installed ${dir}"
+    if [[ -f "$dir/bun.lock" || -f "$dir/bun.lockb" ]]; then
+      ( cd "$dir" && bun install --frozen-lockfile )
+      say "installed ${dir} (frozen)"
+    else
+      ( cd "$dir" && bun install )
+      say "installed ${dir}"
+    fi
   else
     say "skipped ${dir} (no package.json)"
   fi
