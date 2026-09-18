@@ -140,7 +140,9 @@ setup RUN_ID CONFIG="":
     # `command -v` first: without it a missing pi prints one line of
     # "command not found" and a bare non-empty check calls that a pass.
     command -v pi >/dev/null 2>&1 || { echo "   pi is not on PATH"; exit 1; }
-    out="$(pi --list-models 2>&1 || true)"
+    # `< /dev/null` for the same reason as gate D's pi call below: this script
+    # arrives on remote bash's stdin, so a stdin-reading command truncates it.
+    out="$(pi --list-models < /dev/null 2>&1 || true)"
     n="$(printf '%s\n' "$out" | grep -c . || true)"
     if [ "${n:-0}" -eq 0 ]; then
       echo "   pi --list-models printed nothing"; exit 1
@@ -229,7 +231,25 @@ setup RUN_ID CONFIG="":
     cost_fail=0
     # jq, not python: an unindented line inside a recipe body TERMINATES the
     # recipe, and multi-line python cannot survive that. jq ships in the image.
-    pi_cost="$(timeout 180 pi -p --mode json \
+    #
+    # `< /dev/null` IS LOAD-BEARING, and it must attach to `pi`, not to `jq`.
+    # This whole block is a heredoc piped to `ssh 'bash -s'`, so remote bash is
+    # reading the script FROM STDIN: any command here that reads stdin eats the
+    # rest of the gate script. Without it, pi swallowed everything below, bash
+    # hit EOF and exited 0, and the `[ "$ping_fail" -eq 0 ] || exit 2` lines at
+    # the bottom never ran — which is how C/D/E passed unconditionally (printing
+    # `FAIL <model>` and then `C PASS`, with no D cost line and no E credit
+    # lines) from the gate's introduction until 2026-09-17.
+    #
+    # `--no-tools` is LOAD-BEARING TOO, and for a completely different reason:
+    # pi is an AGENT, not a completion endpoint. Once stdin was detached (above)
+    # it started actually doing the task — it wrote a real `sandboxes.md` into
+    # ~/app, which dirtied the repo and made the NEXT setup run fail gate A.
+    # Gate D only needs a live billable call that reports a cost, so take the
+    # tools away and the probe cannot touch the tree. `--no-session` keeps a
+    # gate that re-runs often from accumulating session files.
+    pi_cost="$(timeout 180 pi -p --mode json < /dev/null \
+                 --no-tools --no-session \
                  --provider openrouter --model deepseek/deepseek-v4-flash-0731 \
                  'Write one sentence about sandboxes.' 2>/dev/null \
                | jq -s '[.. | objects | select(has("cost")) | .cost.total // 0] | max // 0' \

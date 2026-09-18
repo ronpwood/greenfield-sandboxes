@@ -10,7 +10,7 @@ Usage:
 Phases: engineer(request) -> planner -> git(commit_plan)
         -> test_designer [gates: artifacts_exist, tests_red]
         -> git(commit_tests)
-        -> builder -> code(test: fixed + generated) [-> builder(fix) ... bounded]
+        -> builder -> code(verify: typecheck + fixed + generated) [-> builder(fix) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
@@ -117,9 +117,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run fixed + generated suites — a known command, "
-                                               "so code runs it and no agent has to rediscover it")) as ph:
-            test = quality.run_tests(run, extra_files=both_suites)
+                                   description="Typecheck, then run fixed + generated suites — "
+                                               "known commands, so code runs them and no agent "
+                                               "has to rediscover them")) as ph:
+            test = quality.run_verify(run, extra_files=both_suites)
             record(ph, test)
 
         if test.passed:
@@ -153,9 +154,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     # stale. Re-run it rather than commit on a result that predates the change.
     if revised and review is not None and review.approved:
         with run.phase(PhaseParams(name="retest", kind="code", owner="quality",
-                                   description="Re-run fixed + generated suites — the revision "
-                                               "changed code after the last green result")) as ph:
-            test = quality.run_tests(run, extra_files=both_suites)
+                                   description="Typecheck, then re-run fixed + generated suites "
+                                               "— the revision changed code after the last "
+                                               "green result")) as ph:
+            test = quality.run_verify(run, extra_files=both_suites)
             record(ph, test)
 
     # Red tests or a rejected review stop the chain here: the code stays

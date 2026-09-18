@@ -168,6 +168,8 @@ teardown RUN_ID *FLAGS:
             echo "!! $VM's working tree is dirty — this uncommitted work would be destroyed:"
             echo "$DIRTY" | sed 's/^/!!   /'
             echo "!! refusing to destroy. VM left alive. Either:"
+            echo "!!   keep it:             just sbx manage snapshot $RUN_ID \"<why>\""
+            echo "!!                        then: just sbx manage harvest $RUN_ID, then re-run teardown"
             echo "!!   inspect and commit/discard by hand over ssh, then re-run teardown"
             echo "!!   or accept the loss:  just sbx lifecycle teardown $RUN_ID --force-dirty"
             exit 1

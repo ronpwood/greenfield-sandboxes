@@ -8,7 +8,7 @@ Usage:
     uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> planner -> git(commit_plan)
-        -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
+        -> builder -> code(verify: typecheck + tests) [-> builder(fix) -> code(verify) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
@@ -96,9 +96,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs "
-                                               "it and no agent has to rediscover it")) as ph:
-            test = quality.run_tests(run)
+                                   description="Typecheck, then run the suite — known commands, "
+                                               "so code runs them and no agent has to "
+                                               "rediscover them")) as ph:
+            test = quality.run_verify(run)
             record(ph, test)
 
         if test.passed:
@@ -132,9 +133,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     # stale. Re-run it rather than commit on a result that predates the change.
     if revised and review is not None and review.approved:
         with run.phase(PhaseParams(name="retest", kind="code", owner="quality",
-                                   description="Re-run the suite — the revision changed code "
-                                               "after the last green result")) as ph:
-            test = quality.run_tests(run)
+                                   description="Typecheck, then re-run the suite — the revision "
+                                               "changed code after the last green result")) as ph:
+            test = quality.run_verify(run)
             record(ph, test)
 
     # Red tests or a rejected review stop the chain here: the code stays

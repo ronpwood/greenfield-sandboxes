@@ -1,9 +1,17 @@
 """Deterministic lint, typecheck, and build blocks for the payload app.
 
 The app intentionally has no local package toolchain. Linting uses a pinned
-Oxlint release through Bun; "typecheck" is the strongest zero-config Bun-native
-syntax/import/transpilation check available for the current JS/TS sources.
-Build blocks add minification and keep all outputs inside the ADW session.
+Oxlint release through Bun; `typecheck` is real type-checking — a pinned `tsc
+--noEmit` over the entry graph, non-strict — so undeclared names and wrong
+argument types fail the gate. `build` keeps `bun build`, which is a bundle, not
+a check.
+
+That distinction is the whole point of the block. `typecheck` USED to run
+`bun build --target=browser`, which strips types without checking them. Measured
+2026-09-17 on the gf-e2e-20260917-cbb166 tree: with an undeclared `idx`
+reintroduced, `bun build` exits 0 and bundles 18 modules; non-strict tsc reports
+`circle-wheel.ts(99,36): error TS2304: Cannot find name 'idx'`. A gate that
+compiles a crash is worse than no gate, because the chain reports it as green.
 
 The app's paths come from app.manifest.yaml at the repo root — `just app swap`
 edits that file, not this one. What still changes here on a swap is the
@@ -25,6 +33,18 @@ from .manifest import load as load_manifest
 from .utils import now_iso, operator_env
 
 OXLINT_VERSION = "1.36.0"
+
+# Pinned for the same reason oxlint is: a gate whose strictness drifts with
+# whatever the registry serves today is not a gate, it is a coin flip, and a
+# fan-out comparing arms needs every arm checked by the same compiler. Bumping
+# this is a DELIBERATE change — expect new errors in code that passed yesterday,
+# and make the bump its own commit.
+#
+# Non-strict on purpose (`--strict false`; tsc 7 defaults to strict). Measured on
+# the same tree: strict finds 17 errors, non-strict 15, and the two extra are
+# style (possibly-null, implicit-any), not crashes. Fix loops are bounded
+# (MAX_FIX_LOOPS = 3) and are better spent on defects than on annotations.
+TSC_VERSION = "7.0.2"
 
 # How much of a failing command's output rides back inside the envelope. Enough
 # for a builder to act on without opening the artifact; bounded so a runaway
@@ -141,12 +161,29 @@ def lint(run) -> QualityCheckResult:
 
 
 def typecheck(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "typecheck") / "bundle"
+    """Type-check the entry graph with a pinned tsc.
+
+    ENTRY only, not the whole tree: the test files import `bun:test`, whose types
+    need a bun-specific lib this zero-config invocation does not carry. `bun test`
+    runs those; tsc checks the code they exercise. Every source file that matters
+    is reachable from ENTRY by construction — the app is a single module graph off
+    index.html, which is what makes that boundary safe.
+
+    The flags recreate what a bundler assumes, because there is no tsconfig.json
+    in the repo to read: `bundler` resolution plus `allowImportingTsExtensions`
+    for the `./main.ts` style imports the app uses, and a dom-bearing lib so
+    `document` and friends exist. `--skipLibCheck` keeps the cost in this app's
+    own code rather than in @types.
+    """
     return _run(QualityCheckSpec(
         name="typecheck",
         area="frontend",
         operation="typecheck",
-        argv=[BUN, "build", "--target=browser", ENTRY, "--outdir", str(output_dir)],
+        argv=[BUN, "x", "--package", f"typescript@{TSC_VERSION}", "tsc",
+              "--noEmit", "--skipLibCheck", "--strict", "false",
+              "--target", "es2022", "--module", "esnext",
+              "--moduleResolution", "bundler", "--allowImportingTsExtensions",
+              "--lib", "es2022,dom,dom.iterable", ENTRY],
     ), run)
 
 
@@ -189,6 +226,28 @@ def run_tests(run, extra_files: list[str] | None = None) -> QualityResult:
                  f"{check.output_tail}".rstrip()])
     return QualityResult(passed=check.passed, checks=[check], failures=failures,
                          artifacts=[check.output_artifact])
+
+
+def run_verify(run, extra_files: list[str] | None = None) -> QualityResult:
+    """Typecheck, then tests, as one QualityResult.
+
+    This is what the SDLC chains call where they used to call `run_tests`. Order
+    matters: a type error is cheaper to read than a runtime failure caused by the
+    same mistake, and both are collected either way, so a fix loop gets the whole
+    picture in one pass rather than one gate per iteration.
+
+    Both blocks always run — this deliberately does NOT short-circuit on a failed
+    typecheck. A builder handed "15 type errors AND these 3 failing tests" can fix
+    them together; handed them one gate at a time it spends a bounded fix loop per
+    gate. `run_tests` stays as it was for the chains that only want the suite.
+    """
+    checks = [typecheck(run), tests(run, extra_files)]
+    failures = [
+        f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
+        for check in checks if not check.passed
+    ]
+    return QualityResult(passed=not failures, checks=checks, failures=failures,
+                         artifacts=[check.output_artifact for check in checks])
 
 
 def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
