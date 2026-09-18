@@ -209,37 +209,73 @@ setup RUN_ID CONFIG="":
     #
     # Bounded at 4 tries: a genuinely retired or misspelled model id still
     # fails the gate, just ~3 minutes later.
-    ping_once() {   # $1 = model id; echoes the answer text, empty on failure
-      local m="$1" body resp
+    # ping_once echoes the RAW response and the caller parses it. It must not
+    # hand anything back through a global: it is invoked in a command
+    # substitution, so its assignments happen in a subshell and never reach
+    # this scope, and under `set -u` reading that never-set global aborts the
+    # whole remote script. That is not hypothetical -- it is how the first cut
+    # of this retry failed all six arms of a fresh mount.
+    ping_once() {   # $1 = model id; echoes the raw JSON response
+      local m="$1" body
       body="$(printf '{"model":"%s","max_tokens":256,"provider":{"zdr":true,"data_collection":"deny"},"messages":[{"role":"user","content":"ping - respond with pong"}]}' "$m")"
-      resp="$(curl -sS --max-time 180 https://openrouter.ai/api/v1/chat/completions \
-                -H "Authorization: Bearer ${KEY}" \
-                -H 'Content-Type: application/json' \
-                -d "$body" || true)"
-      PING_ERR="$(printf '%s' "$resp" | jq -r '.error.message // .error // "no content and no error field"' 2>/dev/null || echo 'unparseable response')"
-      # Reasoning models answer with content=null and the text under .reasoning.
-      # Accepting only .content here produces false failures on those models.
-      printf '%s' "$resp" | jq -r '
-        ((.choices[0].message.content // "") + (.choices[0].message.reasoning // ""))
-      ' 2>/dev/null || true
+      curl -sS --max-time 180 https://openrouter.ai/api/v1/chat/completions \
+        -H "Authorization: Bearer ${KEY}" \
+        -H 'Content-Type: application/json' \
+        -d "$body" || true
     }
 
     ping_fail=0
     for m in $MODELS; do
-      text=""; delay=20
+      text=""; err="no response"; delay=20
       for try in 1 2 3 4; do
-        text="$(ping_once "$m")"
-        if [ -n "$text" ] && [ "$text" != "null" ]; then break; fi
-        text=""
+        resp="$(ping_once "$m")"
+        # Reasoning models answer with content=null and the text under
+        # .reasoning. Accepting only .content produces false failures on those.
+        text="$(printf '%s' "$resp" | jq -r '
+          ((.choices[0].message.content // "") + (.choices[0].message.reasoning // ""))
+        ' 2>/dev/null || true)"
+        [ "$text" = "null" ] && text=""
+        [ -n "$text" ] && break
+        err="$(printf '%s' "$resp" | jq -r '.error.message // .error // "no content and no error field"' 2>/dev/null || echo 'unparseable response')"
         [ $try -lt 4 ] || break
-        echo "   retry ${m} (attempt ${try}/4, ${delay}s): ${PING_ERR}"
+        echo "   retry ${m} (attempt ${try}/4, ${delay}s): ${err}"
         sleep "$delay"; delay=$(( delay * 2 ))
       done
       if [ -n "$text" ]; then
         echo "   pass  ${m}"
       else
-        echo "   FAIL  ${m}: ${PING_ERR}"
-        ping_fail=1
+        # What this gate exists to prove is that ZDR ROUTING RESOLVES for every
+        # roster model before real work runs -- the per-request
+        # provider.zdr/data_collection pin lives here and nowhere else, because
+        # the account-wide dashboard setting is what actually enforces the
+        # policy on the agents' own calls (pi's models.json cannot carry
+        # arbitrary body fields). See .env.sample and references/models.md.
+        #
+        # A rate-limit answer does not contradict that: OpenRouter picked a ZDR
+        # upstream and that upstream said "too many requests". Routing resolved;
+        # the pool is saturated. "No endpoints found" is the opposite -- no ZDR
+        # provider serves this model at all -- and that is precisely the
+        # condition worth failing a mount over.
+        #
+        # Measured 2026-09-18 at N=6: openai/gpt-5.6-luna, the documenter seat,
+        # exhausted four tries on three of six arms while every other roster
+        # model passed first try on every arm. Its ZDR pool is small and six
+        # concurrent mounts saturate it. Treating that as a dead roster is a
+        # false negative on the one assertion that decides whether a sandbox is
+        # fit to run.
+        #
+        # The tolerated case is an ALLOWLIST, not a catch-all: anything that is
+        # not recognisably a rate limit still fails the gate.
+        case "$(printf '%s' "$err" | tr '[:upper:]' '[:lower:]')" in
+          *"rate-limit"*|*"rate limit"*|*"ratelimit"*|*"too many requests"*|*"429"*)
+            echo "   BUSY  ${m}: ZDR routing resolved; upstream saturated after 4 tries"
+            echo "         not a gate failure — ${err}"
+            ;;
+          *)
+            echo "   FAIL  ${m}: ${err}"
+            ping_fail=1
+            ;;
+        esac
       fi
     done
 
