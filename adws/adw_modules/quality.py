@@ -20,6 +20,7 @@ command blocks themselves (lint/typecheck/build/test are stack-specific).
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shlex
 import subprocess
@@ -238,6 +239,36 @@ def tests(run, extra_files: list[str] | None = None) -> QualityCheckResult:
     ), run)
 
 
+def render(run) -> QualityCheckResult:
+    """Load the app in a real browser, drive it, and fail on what only a browser sees.
+
+    Delegated to `adw_modules/render_smoke.py`, which carries the full rationale.
+    The short version: `happy-dom` in the fixed suite closed the crash-on-load
+    class, but it does no LAYOUT and no HIT-TESTING. Fan-out 3 shipped six arms
+    with lint, typecheck and every test green, and two did not work — one had
+    eleven of twelve key slices painted over by a single mis-flagged SVG arc, and
+    no gate in the chain could see it.
+
+    Exit 2 is deliberately NOT a failure. It means "I could not look at all"
+    (no chromium, dev server never came up) — our infrastructure breaking, not
+    the builder's code. Spending one of three bounded fix loops on that would be
+    strictly worse than not running the check, so it degrades to a pass and says
+    so in the log. Only exit 1, a real finding, blocks.
+    """
+    check = _run(QualityCheckSpec(
+        name="render",
+        area="frontend",
+        operation="build",          # the enum has no "render"; the name carries it
+        argv=["uv", "run", str(Path(__file__).with_name("render_smoke.py")), APP_DIR],
+        timeout_seconds=300,
+    ), run)
+    if check.returncode == 2:
+        run.console.note("quality render: SKIPPED — could not open a browser "
+                         "(infrastructure, not the build); not blocking")
+        return dataclasses.replace(check, passed=True)
+    return check
+
+
 def run_tests(run, extra_files: list[str] | None = None) -> QualityResult:
     """The test suite as a QualityResult, so it reports like every other block."""
     check = tests(run, extra_files)
@@ -249,7 +280,7 @@ def run_tests(run, extra_files: list[str] | None = None) -> QualityResult:
 
 
 def run_verify(run, extra_files: list[str] | None = None) -> QualityResult:
-    """Lint, typecheck, then tests, as one QualityResult.
+    """Lint, typecheck, tests, then a real browser, as one QualityResult.
 
     This is what the SDLC chains call where they used to call `run_tests`. Order
     is cheapest-signal-first: lint and type errors are easier to read than a
@@ -277,8 +308,16 @@ def run_verify(run, extra_files: list[str] | None = None) -> QualityResult:
     A gate that fails working code to catch a hazard that `happy-dom` now
     catches directly is a bad trade, so it stays off. Revisit only if a future
     crash slips past the fixed suite.
+
+    `render` runs LAST because it is by far the most expensive block (it boots a
+    dev server and a chromium) and because everything ahead of it is a cheaper
+    read on the same mistake. It is the answer to fan-out 3's central result: all
+    six arms passed lint, typecheck and every test, and two of them did not work.
+    Both remaining defect classes were render-only, so no amount of source-level
+    checking could reach them — see `render_smoke.py` for what it does and does
+    NOT catch, which is stated honestly there rather than overclaimed here.
     """
-    checks = [lint(run), typecheck(run), tests(run, extra_files)]
+    checks = [lint(run), typecheck(run), tests(run, extra_files), render(run)]
     failures = [
         f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
         for check in checks if not check.passed

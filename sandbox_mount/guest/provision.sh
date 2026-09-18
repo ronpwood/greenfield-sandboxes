@@ -306,6 +306,43 @@ else
   exit 1
 fi
 
+# ── 8c. headless chromium for the render gate ────────────────────────────────
+# REVERSES a deliberate 2026-09-18 decision, and the reason it is reversed is
+# evidence, not taste. That day's call was "chromium is ~190 MB and buys nothing
+# on the VM that happy-dom does not already cover in the fix loop", so `just sbx
+# manage shot` was built host-side instead. Fan-out 3 measured the gap in that
+# reasoning: happy-dom does no LAYOUT and no HIT-TESTING, and six arms passed
+# lint + typecheck + every test while two of them did not work. One had eleven of
+# twelve key slices painted over by a single wrong SVG arc flag. `shot` runs
+# after the chain is over and gates nothing, so the finding arrived too late to
+# repair. A gate has to live where a failure can still be fixed.
+#
+# Cost is real and accepted: a chromium download per mount. Best-effort ON
+# PURPOSE -- `render` treats "could not open a browser" (exit 2) as a skip, not a
+# failure, so a slow or blocked CDN degrades the chain to exactly what it was
+# yesterday instead of failing every arm of a fan-out. Retried for the same
+# reason the `just` installer is: a shared egress IP makes N concurrent arms N
+# simultaneous unauthenticated downloads.
+step "8c/9 headless chromium (render gate)"
+if uv run --with playwright python -c 'import playwright' >/dev/null 2>&1; then
+  installed=""
+  for try in 1 2 3; do
+    if uv run --with playwright playwright install --with-deps chromium >/dev/null 2>&1 \
+       || uv run --with playwright playwright install chromium >/dev/null 2>&1; then
+      installed=yes; break
+    fi
+    say "chromium install failed (attempt ${try}/3), retrying in $(( try * 10 ))s"
+    sleep $(( try * 10 ))
+  done
+  if [[ -n "$installed" ]]; then
+    say "chromium ready — the render gate will run"
+  else
+    say "chromium NOT installed — the render gate will SKIP (exit 2), chain still green"
+  fi
+else
+  say "playwright unavailable — the render gate will SKIP (exit 2), chain still green"
+fi
+
 # ── 8b. pre-answer Claude Code's interactive onboarding ──────────────────────
 # `claude -p` (the `just sbx run agent` lane) skips onboarding, so nothing here
 # exercised it until someone attached INTERACTIVELY with `claude --resume`.
