@@ -192,23 +192,53 @@ setup RUN_ID CONFIG="":
               | sed 's|^openrouter/||' | sort -u)"
     [ -n "$MODELS" ] || { echo "   parsed zero models out of ${CFG}"; exit 1; }
 
-    ping_fail=0
-    for m in $MODELS; do
+    # Retry a refused ping before failing the gate. An upstream can be BUSY
+    # without being BROKEN, and the two look identical in one probe. Measured
+    # 2026-09-18 on a six-way mount: openai/gpt-5.6-luna answered "temporarily
+    # rate-limited upstream" on three of six arms, survived a 15s stagger, and
+    # then cleared on attempt 3 or 4 with 60s between tries -- every arm, no
+    # intervention beyond waiting. The gate was reporting a transient as a dead
+    # roster, which is a false negative on the one assertion that decides
+    # whether a sandbox is fit to run.
+    #
+    # Why this seat and not the others: the request pins
+    # provider.zdr=true + data_collection=deny, so it only draws from
+    # zero-data-retention upstreams -- a far smaller pool than the model's
+    # general availability, and small pools saturate first under a fan-out.
+    # That filter is deliberate and stays; the retry is what makes it usable.
+    #
+    # Bounded at 4 tries: a genuinely retired or misspelled model id still
+    # fails the gate, just ~3 minutes later.
+    ping_once() {   # $1 = model id; echoes the answer text, empty on failure
+      local m="$1" body resp
       body="$(printf '{"model":"%s","max_tokens":256,"provider":{"zdr":true,"data_collection":"deny"},"messages":[{"role":"user","content":"ping - respond with pong"}]}' "$m")"
       resp="$(curl -sS --max-time 180 https://openrouter.ai/api/v1/chat/completions \
                 -H "Authorization: Bearer ${KEY}" \
                 -H 'Content-Type: application/json' \
                 -d "$body" || true)"
+      PING_ERR="$(printf '%s' "$resp" | jq -r '.error.message // .error // "no content and no error field"' 2>/dev/null || echo 'unparseable response')"
       # Reasoning models answer with content=null and the text under .reasoning.
       # Accepting only .content here produces false failures on those models.
-      text="$(printf '%s' "$resp" | jq -r '
+      printf '%s' "$resp" | jq -r '
         ((.choices[0].message.content // "") + (.choices[0].message.reasoning // ""))
-      ' 2>/dev/null || true)"
-      if [ -n "$text" ] && [ "$text" != "null" ]; then
+      ' 2>/dev/null || true
+    }
+
+    ping_fail=0
+    for m in $MODELS; do
+      text=""; delay=20
+      for try in 1 2 3 4; do
+        text="$(ping_once "$m")"
+        if [ -n "$text" ] && [ "$text" != "null" ]; then break; fi
+        text=""
+        [ $try -lt 4 ] || break
+        echo "   retry ${m} (attempt ${try}/4, ${delay}s): ${PING_ERR}"
+        sleep "$delay"; delay=$(( delay * 2 ))
+      done
+      if [ -n "$text" ]; then
         echo "   pass  ${m}"
       else
-        err="$(printf '%s' "$resp" | jq -r '.error.message // .error // "no content and no error field"' 2>/dev/null || echo 'unparseable response')"
-        echo "   FAIL  ${m}: ${err}"
+        echo "   FAIL  ${m}: ${PING_ERR}"
         ping_fail=1
       fi
     done
