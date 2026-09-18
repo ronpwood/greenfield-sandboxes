@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import signal
 import subprocess
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -240,6 +243,62 @@ class ToolCallTracker:
         }
 
 
+# How long pi may produce NOTHING before we call it hung.
+#
+# Measured 2026-09-18, solo greenfield run: a builder wrote a /tmp diagnostic
+# containing `setInterval(..., 0)` with no `clearInterval`, ran it with `bun
+# run`, and that child never exited. The bash tool call never returned, pi sat
+# waiting on it, and this read loop blocked on a pipe that would never produce
+# another byte. THIRTY-SEVEN MINUTES of zero output at 0.4% CPU, zero tokens,
+# and nothing anywhere in the stack bounded it. Killing the grandchild by hand
+# unblocked the call and the builder resumed within seconds.
+#
+# Nothing else catches this class. pi has no tool timeout (`pi --help` offers
+# only allow/deny lists), and the failure is indistinguishable from a slow
+# phase: at N=6 a wedged arm holds a VM and a live key open with no ceiling and
+# never reports a failure, because an absence is not an error.
+#
+# 900s is deliberately generous. The longest phase TOTALS observed are ~410s
+# (test_design) and one 46-minute outlier, but those contain many turns; this
+# bounds the gap BETWEEN events, which any single LLM turn clears easily. The
+# point is to convert "hangs forever, silently" into "fails in 15 minutes, with
+# a reason" -- not to police slow models.
+STALL_SECONDS = int(os.environ.get("PI_STALL_SECONDS", "900"))
+
+
+def _pump(stream, sink: "queue.Queue") -> None:
+    """Move pi's stdout into a queue so the main loop can apply a deadline.
+
+    `for line in process.stdout` cannot time out; a queue read can.
+    """
+    try:
+        for line in stream:
+            sink.put(line)
+    finally:
+        sink.put(None)          # sentinel: stream closed
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """Kill pi AND everything it spawned.
+
+    The process GROUP is the point. The thing that hangs is typically a
+    grandchild (pi -> bash -> bun), so signalling pi alone leaves the real
+    culprit running and holding the pipe open. `start_new_session=True` at
+    spawn gives the child its own group so this can reach all of it without
+    touching the ADW itself.
+    """
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
         on_spawn: Optional[Callable[[int], None]] = None,
         on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
@@ -275,15 +334,37 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     # EOF. That failure is silent and total: no request goes out, no bytes come
     # back, and the ADW blocks on a read loop with nothing to read. Observed as
     # a run that sat idle at 0% CPU with an empty raw_output.jsonl.
+    # start_new_session: pi and every process it spawns share one process
+    # group, so a stall can be killed as a TREE. Without it a hung grandchild
+    # (pi -> bash -> bun) survives and keeps the pipe open forever.
     process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, bufsize=1, cwd=request.cwd,
-                               env=operator_env())
+                               env=operator_env(), start_new_session=True)
     if on_spawn:
         on_spawn(process.pid)
+    events: "queue.Queue" = queue.Queue()
+    threading.Thread(target=_pump, args=(process.stdout, events),
+                     daemon=True).start()
+    last = time.monotonic()
     with raw_path.open("a") as raw:
         assert process.stdout is not None
-        for line in process.stdout:
+        while True:
+            try:
+                line = events.get(timeout=STALL_SECONDS)
+            except queue.Empty:
+                _kill_tree(process)
+                silent = int(time.monotonic() - last)
+                raise RuntimeError(
+                    f"pi produced no output for {silent}s (limit {STALL_SECONDS}s) and was "
+                    f"killed with its process tree. This is almost always a tool call that "
+                    f"never returns — a bash command with no exit (an uncleared setInterval, "
+                    f"a server started in the foreground, an interactive prompt). Raise "
+                    f"PI_STALL_SECONDS if a legitimate turn needs longer."
+                )
+            if line is None:
+                break
+            last = time.monotonic()
             raw.write(line)
             raw.flush()                      # events land on disk as they happen
             line = line.strip()
