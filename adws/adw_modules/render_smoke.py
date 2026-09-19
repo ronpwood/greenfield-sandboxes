@@ -26,11 +26,24 @@ typecheck and every test green, and two of them did not work:
          and the reviewer are for. Do not "fix" this by widening the interactive
          heuristic to every SVG path — that trades a real signal for noise.
 
-So the honest scope is three things nothing else in the chain checks:
+So the honest scope is five things nothing else in the chain checks:
   A  the REAL bundle loads in a REAL browser with no uncaught error
   B  it renders something
   C  no interactive element is completely unreachable (occlusion)
   D  clicking the controls throws nothing and does not blank the page
+  E  a ring of pie/annular sectors is not drawn the long way round
+
+Assertion E was added after `fixval-20260919-250a64` PASSED this gate and
+shipped a twelve-slice radial wheel whose wedges each swept 330 degrees
+instead of 30 (`large-arc-flag=1` on a 30-degree chord). C did not see it, and
+the reason generalises: in gf3-5 ONE broken slice covered the other eleven, so
+reachability collapsed and C fired. When ALL of them are broken identically,
+each still has a topmost sliver and every control tests as reachable. **C
+catches asymmetric breakage; E catches symmetric breakage.** E is deliberately
+narrow -- three or more sibling arcs sharing a radius, each with the flag set
+while spanning under 90 degrees -- because rounded corners carry flag 0 and a
+lone decorative arc is not three of them. Validated both ways on live VMs:
+it fails fixval, and passes the two apps known to be correct.
 
 Assertion D is new signal outright: every gate we have is load-time, and part B
 item 11 ("survives interaction") has until now been a manual judgement.
@@ -47,7 +60,13 @@ bar applies here. Two deliberate concessions:
     `cursor: pointer`. Anything vaguer produces noise.
 
 Usage:
-    render_smoke.py <app_dir> [--json] [--max-clicks N]
+    ./render_smoke.py <app_dir> [--json] [--max-clicks N]      # or: uv run render_smoke.py ...
+
+Do NOT run it as `python3 render_smoke.py`: the shebang is `uv run`, which is
+what installs the PEP-723 dependencies, and a bare interpreter skips that. It
+used to exit 2 ("could not look") in that case, which a fix loop IGNORES -- so
+an agent could believe it had checked its work while never seeing the page, and
+one did, sixteen times. The script now re-execs itself under `uv run` instead.
 
 Exit 0 = pass. Exit 1 = a real failure the builder must fix. Exit 2 = could not
 look at all (no browser, server never came up) — an infrastructure problem, and
@@ -197,17 +216,137 @@ PROBE_JS = r"""
       label, reachable, occluder: seen.occluder,
     });
   });
-  return { controls: out, textLength: (document.body.innerText || '').trim().length };
+  // E: pie sectors that sweep the wrong way round.
+  //
+  // MEASURED on fixval-20260919-250a64, which this gate PASSED: all twelve
+  // wedges of a twelve-slice wheel carried `A 198 198 0 1 1` -- large-arc-flag=1 on
+  // endpoints 30 degrees apart, so each wedge swept 330 degrees instead of 30
+  // and every slice painted over the whole wheel.
+  //
+  // Assertion C missed it for a specific reason worth keeping in mind: in
+  // gf3-5 ONE slice was broken and covered the other eleven, so reachability
+  // collapsed and C fired. When ALL of them are broken identically each still
+  // has a topmost sliver, so every control tests as reachable. C catches
+  // ASYMMETRIC breakage; this catches symmetric breakage.
+  //
+  // Intent is not recoverable from one path -- a genuine 330 degree wedge is
+  // legal -- so the check is on SIBLINGS: N>=3 sectors sharing a centre and a
+  // radius are a wheel, and a wheel's slices sum to ~360. Twelve correct
+  // wedges sum to 360; twelve broken ones sum to 3960. That ratio is the
+  // signal, and nothing legitimate lands near it.
+  const ARC_MIN_RADIUS = 20;     // ignore rounded corners and other small curvature
+  const ARC_MAX_SMALL = 90;      // a slice wider than this may legitimately take the long way
+  const toDeg = (rad) => rad * 180 / Math.PI;
+
+  // Walk a path's commands tracking the current point, because an arc's start
+  // is wherever the previous command left off. Only M/L/H/V/A/Z are followed
+  // exactly; any other command just resets tracking, which makes this give up
+  // rather than guess. Both sector shapes we draw are covered: a pie wedge
+  // (M centre, L rim, A) and an annulus (M rim, A, L, A).
+  const arcsOf = (d) => {
+    const out = [];
+    const toks = String(d).match(/[A-Za-z]|-?[0-9.]+(?:e-?[0-9]+)?/gi) || [];
+    let i = 0, cx = 0, cy = 0, sx = 0, sy = 0, cmd = '';
+    const num = () => parseFloat(toks[i++]);
+    while (i < toks.length) {
+      if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
+      if (i >= toks.length && !/[Zz]/.test(cmd)) break;
+      const rel = cmd === cmd.toLowerCase();
+      const C = cmd.toUpperCase();
+      if (C === 'M') { const x = num(), y = num(); cx = rel ? cx + x : x; cy = rel ? cy + y : y; sx = cx; sy = cy; cmd = rel ? 'l' : 'L'; }
+      else if (C === 'L') { const x = num(), y = num(); cx = rel ? cx + x : x; cy = rel ? cy + y : y; }
+      else if (C === 'H') { const x = num(); cx = rel ? cx + x : x; }
+      else if (C === 'V') { const y = num(); cy = rel ? cy + y : y; }
+      else if (C === 'Z') { cx = sx; cy = sy; }
+      else if (C === 'A') {
+        const rx = num(), ry = num(); num();            // radii, x-rotation
+        const laf = num() === 1; num();                 // large-arc, sweep
+        const ex = num(), ey = num();
+        const x = rel ? cx + ex : ex, y = rel ? cy + ey : ey;
+        out.push({ rx, ry, laf, chord: Math.hypot(x - cx, y - cy) });
+        cx = x; cy = y;
+      } else return out;                                 // a curve: stop guessing
+    }
+    return out;
+  };
+
+  // The fault signature, stated narrowly on purpose: three or more sibling arcs
+  // that share a radius, each set large-arc-flag=1, and each spans well under a
+  // half-circle the short way. Rounded corners carry flag 0 and never qualify;
+  // a lone decorative 300-degree arc is not three of them.
+  const groups = {};
+  for (const path of document.querySelectorAll('path')) {
+    for (const a of arcsOf(path.getAttribute('d') || '')) {
+      const r = a.rx;
+      if (!(r >= ARC_MIN_RADIUS)) continue;
+      if (Math.abs(a.rx - a.ry) / Math.max(a.rx, a.ry, 1) > 0.02) continue;  // circular only
+      if (!a.laf) continue;
+      if (!(a.chord <= 2 * r)) continue;
+      const small = 2 * toDeg(Math.asin(Math.min(1, a.chord / (2 * r))));
+      if (small >= ARC_MAX_SMALL) continue;
+      const key = String(Math.round(r));
+      (groups[key] = groups[key] || { n: 0, total: 0, small: 0 });
+      groups[key].n += 1;
+      groups[key].total += 360 - small;          // what the flag makes it draw
+      groups[key].small += small;                // what it plainly meant to draw
+    }
+  }
+  const sectorFaults = [];
+  for (const [key, g] of Object.entries(groups)) {
+    if (g.n < 3) continue;                     // not a ring of slices
+    sectorFaults.push({
+      radius: key, slices: g.n,
+      degreesDrawn: Math.round(g.total),
+      each: Math.round(g.total / g.n),
+      intended: Math.round(g.small / g.n),
+    });
+  }
+
+  return { controls: out, sectorFaults,
+           textLength: (document.body.innerText || '').trim().length };
 }
 """
+
+
+def _reexec_under_uv() -> None:
+    """Re-run this script through `uv run`, which installs the PEP-723 header.
+
+    The shebang is `#!/usr/bin/env -S uv run`, so `./render_smoke.py` gets
+    playwright and `python3 render_smoke.py` does not — the interpreter is
+    invoked directly and the header is just a comment. MEASURED on run
+    `fixval-20260919-250a64`: the builder, told to run this gate, chose
+    `python3 adws/adw_modules/render_smoke.py` and got exit 2 SIXTEEN times.
+
+    Exit 2 means "could not look", which a fix loop deliberately ignores — so
+    the agent believed it had checked its work sixteen times while never once
+    seeing the page. A silent skip is worse than a failure, and the invocation
+    is not the agent's mistake to make: recover it here instead.
+
+    Guarded by an env var so a re-exec can never recurse, and falling through
+    (rather than failing) when uv is absent, so the original ImportError
+    message still explains itself.
+    """
+    if os.environ.get("RENDER_SMOKE_REEXEC") == "1":
+        return
+    from shutil import which
+    if not which("uv"):
+        return
+    os.environ["RENDER_SMOKE_REEXEC"] = "1"
+    print("render_smoke: no playwright under this interpreter — re-running via `uv run`.",
+          file=sys.stderr)
+    proc = subprocess.run(["uv", "run", os.path.abspath(__file__), *sys.argv[1:]])
+    raise SystemExit(proc.returncode)
 
 
 def run(app_dir: str, max_clicks: int) -> dict:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
+        _reexec_under_uv()          # does not return when it can recover
         print("render_smoke: playwright is not installed.", file=sys.stderr)
-        print("  provision.sh installs it; on a host: uv run --with playwright ...", file=sys.stderr)
+        print("  Run it as `uv run adws/adw_modules/render_smoke.py <app-dir>`,", file=sys.stderr)
+        print("  or `./adws/adw_modules/render_smoke.py <app-dir>` — NOT `python3 ...`,", file=sys.stderr)
+        print("  which bypasses the PEP-723 header that installs playwright.", file=sys.stderr)
         raise SystemExit(2)
 
     app = Path(app_dir)
@@ -256,6 +395,10 @@ def run(app_dir: str, max_clicks: int) -> dict:
             report["textLength"] = probe["textLength"]
             report["controlCount"] = len(probe["controls"])
             report["unreachable"] = [c for c in probe["controls"] if not c["reachable"]]
+            # Assertion E. Read BEFORE the interaction pass, like the rest: a
+            # wheel drawn wrong is wrong on arrival, and a click that redraws it
+            # must not be able to launder the fault.
+            report["sectorFaults"] = probe.get("sectorFaults", [])
 
             # D: drive it. Clicking is what part B item 11 measures by hand, and
             # nothing in the chain has ever done it.
@@ -311,6 +454,14 @@ def verdict(r: dict) -> tuple[bool, list[str]]:
                         "interaction to reproduce):\n" + "\n".join(lines))
     if r.get("textAfter", 1) < MIN_TEXT_CHARS <= r.get("textLength", 0):
         failures.append("The page went blank during the interaction pass.")
+    for g in r.get("sectorFaults", []):
+        failures.append(
+            f"{g['slices']} arcs of radius {g['radius']} set the SVG large-arc-flag to 1 "
+            f"while spanning only ~{g['intended']}deg between their endpoints, so each one "
+            f"draws the LONG way round at ~{g['each']}deg instead "
+            f"({g['degreesDrawn']}deg in total, and a circle is 360). Every slice is "
+            f"painting over the whole ring. Set the flag to 0 for any sector under 180deg "
+            f"— e.g. `const large = Math.abs(to - from) > 180 ? 1 : 0`.")
     return (not failures), failures
 
 

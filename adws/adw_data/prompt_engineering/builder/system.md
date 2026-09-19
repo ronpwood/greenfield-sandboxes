@@ -28,12 +28,17 @@ holding the reasons behind it.** Use that before you report.
 For a front end, the fastest instrument already exists:
 
 ```bash
-./adws/adw_modules/render_smoke.py <app-dir> --json     # e.g. apps/app
+uv run adws/adw_modules/render_smoke.py <app-dir> --json     # e.g. apps/app
 ```
 
+**Use `uv run` exactly as written.** `python3 adws/adw_modules/render_smoke.py` skips the PEP-723
+header that installs the browser driver. A previous builder did that and got "could not look"
+sixteen times in a row while believing it had checked its work each time.
+
 It boots the dev server, loads the real bundle in a real browser, drives the controls, and reports
-uncaught errors, a blank page, and controls nothing can click. **Exit 0 = pass, 1 = a real failure
-worth fixing now, 2 = no browser available, which is a skip and not your problem.** Read
+uncaught errors, a blank page, controls nothing can click, and a ring of sectors drawn the long way
+round. **Exit 0 = pass, 1 = a real failure worth fixing now, 2 = no browser available, which is a
+skip and not your problem** — but if you see exit 2, check your command before you accept it. Read
 `adws/adw_modules/quality.py` if you want to know exactly what the deterministic gates will check —
 it is the same standard you are being held to, and reading it is allowed.
 
