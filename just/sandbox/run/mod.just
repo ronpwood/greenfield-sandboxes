@@ -88,7 +88,12 @@ agent RUN_ID PROMPT:
     # API cleanly, and this lane needs no key at all (ANTHROPIC_API_KEY is a
     # placeholder the client insists on). Synchronous by design: the whole point
     # is to read the reply and send the next turn.
-    ssh "$VM".exe.xyz "cd app && ANTHROPIC_API_KEY=implicit ANTHROPIC_BASE_URL=https://llm.int.exe.xyz claude -p $FLAG --dangerously-skip-permissions $Q"
+    # Keepalives, not cosmetics: `claude -p` buffers its whole reply to the end,
+    # so a long turn (a full build is 30-60min) is a SILENT ssh connection, and
+    # ssh's default ServerAliveInterval is 0. Any NAT or firewall idle timeout in
+    # between drops it, which kills the remote claude mid-turn and loses the work
+    # that was not yet on disk. 30s x 10 tolerates a 5-minute network stall.
+    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$VM".exe.xyz "cd app && ANTHROPIC_API_KEY=implicit ANTHROPIC_BASE_URL=https://llm.int.exe.xyz claude -p $FLAG --dangerously-skip-permissions $Q"
 
     # Only after a successful turn: a first call that died never created a
     # session, and --resume on a session that does not exist would fail forever.

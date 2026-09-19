@@ -311,3 +311,16 @@ def _persist_envelope(run, phase: Phase, agent_name: str, call: AgentCall,
                   "output_type": call.output_type.__name__, "attempt": attempt,
                   **envelope.model_dump()}
         (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+
+
+def with_notes(envelope: EnvelopeBase, notes: str) -> EnvelopeBase:
+    """A copy of `envelope` carrying `notes` for the agent that reads it next.
+
+    The whole envelope is serialized into `previous_envelope` (see `_render`),
+    so anything set here lands in the next agent's prompt without a new field
+    or a new prompt template.
+
+    A copy, not a mutation: the caller normally goes on to commit or re-send the
+    original, and a note aimed at one phase must not leak into the run record.
+    """
+    return envelope.model_copy(update={"notes_for_next_agent": notes})

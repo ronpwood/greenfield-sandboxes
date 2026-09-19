@@ -51,7 +51,35 @@ from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
-MAX_REVISION_LOOPS = 2
+
+# Revisions the BUILDER actually gets. The loop runs one review more than this,
+# because it must END on a verdict: a revision with no review after it would
+# ship unexamined code. So reviews = MAX_REVISIONS + 1, and the final review's
+# findings are, by construction, never acted on.
+#
+# That last sentence used to be a silent bug. The constant was `MAX_REVISION_LOOPS
+# = 2` and it read like a revision budget, but it bounded REVIEWS: every run got
+# review_1 -> revise_1 -> review_2 -> stop, i.e. exactly ONE revision, and
+# review_2's findings were discarded in every run this repo has ever done.
+# Measured on 2026-09-18: gf3-3 went 11 blocking findings -> 8 (18 of 24
+# requirements met) and was cut off there; gf3-1 closed 8 of 10 and its reviewer
+# called the two survivors "small, localized". Both were one loop from done.
+#
+# Now the name means what it says, and the budget is 2 revisions (3 reviews).
+MAX_REVISIONS = 2
+MAX_REVIEWS = MAX_REVISIONS + 1
+
+# Goes to the LAST review only. gf3-6 was approved on a review scoped to a
+# single-file fix, so nothing ever audited the app it shipped — a wheel whose
+# controls were never wired. A final verdict has to be about the delivered
+# thing, not about the most recent diff.
+FINAL_REVIEW_NOTES = (
+    "This is the LAST review of this run: no revision follows it, so your verdict is final "
+    "and whatever you approve is what ships. Audit the DELIVERED APP as a whole, not just "
+    "the most recent diff. Check that every requirement the plan promised is present AND "
+    "actually works end to end — a control that exists but is wired to nothing is a blocking "
+    "finding, not a nitpick."
+)
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
@@ -114,13 +142,15 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     review = None
     revised = False
-    for i in range(1, MAX_REVISION_LOOPS + 1):
+    for i in range(1, MAX_REVIEWS + 1):
+        final = i == MAX_REVIEWS
         with run.phase(PhaseParams(name=f"review_{i}", kind="agent", owner="reviewer",
                                    description="Confirm the build matches the plan")) as ph:
-            review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt, previous=build,
+            review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt,
+                                       previous=agents.with_notes(build, FINAL_REVIEW_NOTES) if final else build,
                                        gates=[gates.artifacts_exist, gates.verdict_consistent]))
 
-        if review.approved or i == MAX_REVISION_LOOPS:
+        if review.approved or final:
             break
 
         with run.phase(PhaseParams(name=f"revise_{i}", kind="agent", owner="builder", retries=1,

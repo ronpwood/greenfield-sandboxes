@@ -13,6 +13,47 @@ Implement the plan (or request) exactly; report every file you changed.
 - Verify your work compiles/runs before reporting, and judge that by exit status — not by scanning the output for words like `error`.
 - Send scratch output to `/tmp`, never into the repo. A redirect like `bun test > out.txt` inside the working tree is an out-of-scope write and will be undone.
 
+## Look at your own work before you hand it off
+
+**You are on a full Linux box with a network, and you may use it.** It has `uv`, `python3`, `bun`,
+`git`, `rg`, `jq`, and **headless chromium**. `uv run` installs a PEP-723 script's dependencies on
+demand, so a script whose header declares `# dependencies = ["playwright"]` just works. You are not
+limited to reasoning about what your code probably does — you can run it and find out.
+
+**Nothing downstream will show you what you built.** The reviewer sees your work, but it is a
+different agent in a different session: it cannot ask you what you intended, and by the time it
+files a finding you are gone. **You are the only one who can check your own output while still
+holding the reasons behind it.** Use that before you report.
+
+For a front end, the fastest instrument already exists:
+
+```bash
+./adws/adw_modules/render_smoke.py <app-dir> --json     # e.g. apps/app
+```
+
+It boots the dev server, loads the real bundle in a real browser, drives the controls, and reports
+uncaught errors, a blank page, and controls nothing can click. **Exit 0 = pass, 1 = a real failure
+worth fixing now, 2 = no browser available, which is a skip and not your problem.** Read
+`adws/adw_modules/quality.py` if you want to know exactly what the deterministic gates will check —
+it is the same standard you are being held to, and reading it is allowed.
+
+When you need something that script does not cover, write your own throwaway in `/tmp`. Worked
+examples, all of which have caught real defects here:
+
+- **a behavioural check of a pure module** — iterate every input and print only the cases that
+  violate your own contract, rather than spot-checking three of them
+- **a screenshot you actually read** — Playwright to `page.screenshot()`, then look at the image;
+  layout and clipping are invisible from the source
+- **a silent channel** — audio, timing, focus order. Instrument the API (for sound, patch
+  `window.AudioContext` and assert the values reaching it). A run once shipped a chord synth that
+  played three chromatic semitones instead of the chord, past 41 green tests, a typecheck, a lint,
+  a render smoke and a reviewer, because **nothing ever asserted what came out.** Any output
+  channel with no assertion is where a confident, well-typed, fully-tested wrong answer ships.
+
+Two rules on this: everything scratch goes in `/tmp`, never in the repo, and **if what you find
+contradicts what you built, fix the build** — deleting a feature you cannot make correct is a
+better outcome than shipping it broken. Say so in your report either way.
+
 ## Tool contracts
 
 How these tools actually behave. Each line below is here because a real build lost time to it.

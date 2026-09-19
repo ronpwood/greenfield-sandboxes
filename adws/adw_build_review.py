@@ -27,7 +27,23 @@ from adw_modules.data_types import (AgentCall, BuildOutput, PhaseParams,
                                     ReviewOutput)
 
 REQUIRED_AGENTS = ["builder", "reviewer"]
-MAX_REVISION_LOOPS = 3
+
+# Revisions the builder gets. Reviews = MAX_REVISIONS + 1, because the loop must
+# END on a verdict — a revision with no review after it would ship unexamined
+# code. Behaviour here is unchanged (3 reviews, 2 revisions); only the name is,
+# so it no longer reads like a revision budget of 3. See adw_tdd_sdlc.py.
+MAX_REVISIONS = 2
+MAX_REVIEWS = MAX_REVISIONS + 1
+
+# Goes to the LAST review only: no revision follows it, so it must judge the
+# delivered app rather than the most recent diff.
+FINAL_REVIEW_NOTES = (
+    "This is the LAST review of this run: no revision follows it, so your verdict is final "
+    "and whatever you approve is what ships. Audit the DELIVERED APP as a whole, not just "
+    "the most recent diff. Check that every requirement the plan promised is present AND "
+    "actually works end to end — a control that exists but is wired to nothing is a blocking "
+    "finding, not a nitpick."
+)
 
 
 def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
@@ -45,17 +61,16 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                      gates=[gates.diff_matches_claims]))
 
     review = None
-    for i in range(1, MAX_REVISION_LOOPS + 1):
+    for i in range(1, MAX_REVIEWS + 1):
+        final = i == MAX_REVIEWS
         with run.phase(PhaseParams(name=f"review_{i}", kind="agent", owner="reviewer",
                                    description="Rule on every requirement in the spec, against the code on disk")) as ph:
             review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt,
-                                       previous=previous,
+                                       previous=agents.with_notes(previous, FINAL_REVIEW_NOTES) if final else previous,
                                        gates=[gates.artifacts_exist,
                                               gates.verdict_consistent]))
 
-        if review.approved:
-            break
-        if i == MAX_REVISION_LOOPS:
+        if review.approved or final:
             break
 
         with run.phase(PhaseParams(name=f"revise_{i}", kind="agent", owner="builder", retries=1,
@@ -64,7 +79,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                          gates=[gates.diff_matches_claims]))
 
     return run.finish(accepted=review is not None and review.approved,
-                      reason=f"the reviewer never approved after {MAX_REVISION_LOOPS} revision(s)")
+                      reason=f"the reviewer never approved after {MAX_REVISIONS} revision(s)")
 
 
 if __name__ == "__main__":
