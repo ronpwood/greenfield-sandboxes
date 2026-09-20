@@ -218,6 +218,25 @@ def build(run) -> QualityCheckResult:
     ), run)
 
 
+def tests_argv(extra_files: list[str] | None = None) -> list[str]:
+    """THE command that grades a build. One definition, so nothing can diverge.
+
+    This exists as a function because a copy of it drifted. `gates.tests_red`
+    used to certify a generated suite with `bun test <generated>` while the
+    build was graded with `bun test <fixed> <generated>` — a different command,
+    and the difference is load-bearing: `bun test` shares one module registry
+    across the files on its argv (it isolates only under `--isolate`, which this
+    command does not pass). A suite that collides with the fixed one therefore
+    passed the gate alone and detonated in `build`, where no agent has the
+    authority to fix the cause. Measured 2026-09-20: 1.14M tokens, 34 of 35 tool
+    calls, no product code written.
+
+    Any caller that wants to know what the grade will be must call THIS, not
+    assemble its own argv.
+    """
+    return [BUN, "test", TEST_FILE, *(extra_files or [])]
+
+
 def tests(run, extra_files: list[str] | None = None) -> QualityCheckResult:
     """Run the app's suite. A known command — code, not an agent.
 
@@ -234,7 +253,7 @@ def tests(run, extra_files: list[str] | None = None) -> QualityCheckResult:
         name="tests",
         area="frontend",
         operation="build",           # the enum has no "test"; the name carries it
-        argv=[BUN, "test", TEST_FILE, *(extra_files or [])],
+        argv=tests_argv(extra_files),
         timeout_seconds=600,
     ), run)
 

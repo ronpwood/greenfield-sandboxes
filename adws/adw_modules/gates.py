@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from . import quality
 from .data_types import EnvelopeBase, GateReport
 from .manifest import load as load_manifest
 from .quality import BUN, OXLINT_VERSION
@@ -24,6 +27,25 @@ TAIL_CHARS = 1000        # command output kept as evidence on a failure
 def _size(path: Path) -> str:
     n = path.stat().st_size
     return f"{n}B" if n < 1024 else f"{n / 1024:.1f}KB"
+
+
+def _junit_tally(path: Path) -> dict[str, tuple[int, int]]:
+    """Per-FILE (total, failed) from a bun junit report — attribution an exit code cannot give.
+
+    Keyed on each testcase's own `file` attribute, which bun writes exactly as
+    the path appeared on the argv. A file that failed to load has no testcases
+    and so no key at all: absence is the signal, not a zero.
+    """
+    tally: dict[str, tuple[int, int]] = {}
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return tally                 # caller reads this as "reported nothing"
+    for case in root.iter("testcase"):
+        key = case.get("file") or ""
+        total, failed = tally.get(key, (0, 0))
+        tally[key] = (total + 1, failed + (1 if case.find("failure") is not None else 0))
+    return tally
 
 
 def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
@@ -107,7 +129,7 @@ def verdict_consistent(envelope: EnvelopeBase, run) -> GateReport:
 
 
 def tests_red(envelope: EnvelopeBase, run) -> GateReport:
-    """A generated test suite is non-vacuous only if it FAILS on the pre-build tree.
+    """A generated suite is non-vacuous only if it FAILS — under the GRADING command.
 
     A green smoke detector only proves it's on; you prove it works by putting
     smoke under it. `verdict_consistent` refutes a reviewer's self-contradiction
@@ -115,13 +137,28 @@ def tests_red(envelope: EnvelopeBase, run) -> GateReport:
     single assertion — "these tests test something" is mechanically checkable
     as "they fail before the build exists".
 
-    Four checks, no hidden state, evidence recorded either way:
-      containment — the file is inside app.generated_tests_dir, exists, non-empty
-      parses      — oxlint exits 0, so red-by-syntax-error can't masquerade as TDD red
-      RED         — `bun test` exits NON-zero; the failure tail rides along as
-                    the builder's "make exactly this pass"
-      fixed suite — the pre-existing suite is untouched; a designer must not
-                    "help" by editing the tests that guard existing behavior
+    The command matters as much as the verdict. This gate used to run `bun test
+    <generated>` while `build` was graded by `quality.tests()` running `bun test
+    <fixed> <generated>`. `bun test` shares one module registry across the files
+    on its argv, so a generated suite can pass here alone and, run alongside the
+    fixed suite, throw at module load before a single test executes. That is a
+    green gate handing the builder an unbuildable tree, and the builder cannot
+    fix the cause — the fixed suite is not its file to edit. So the command here
+    IS `quality.tests_argv()`, by call and not by copy.
+
+    Six checks, no hidden state, evidence recorded either way:
+      containment  — the file is inside app.generated_tests_dir, exists, non-empty
+      parses       — oxlint exits 0, so red-by-syntax-error can't masquerade as TDD red
+      runs         — under the grading command the generated file produces test
+                     results at all; a file that dies at module load produces
+                     none, and an exit code alone cannot tell that from red
+      RED          — at least one GENERATED test fails; the failure tail rides
+                     along as the builder's "make exactly this pass"
+      fixed suite green — the fixed suite still passes in that same process, so
+                     the generated file has not poisoned the guard on existing
+                     behavior
+      fixed suite untouched — the pre-existing suite is unedited; a designer must
+                     not "help" by editing the tests that guard existing behavior
 
     What `parses` deliberately does NOT do: resolve imports. A TDD test
     legitimately imports a module that doesn't exist yet; `bun build` would
@@ -152,17 +189,55 @@ def tests_red(envelope: EnvelopeBase, run) -> GateReport:
                               "never a file that cannot parse\n"
                               + (lint.stdout + lint.stderr)[-TAIL_CHARS:]))
 
-        red = _cmd([BUN, "test", test_file])
+        # THE grading command, by call and not by copy — see quality.tests_argv.
+        fixed_file = manifest.app.test_file
+        with tempfile.TemporaryDirectory() as tmp:
+            junit = Path(tmp) / "red.xml"
+            argv = quality.tests_argv([test_file]) + [
+                "--reporter=junit", f"--reporter-outfile={junit}"]
+            red = _cmd(argv)
+            tally = _junit_tally(junit)
+        command = " ".join(argv[:-2])
         tail = (red.stdout + red.stderr)[-TAIL_CHARS:]
-        # The tail is evidence on BOTH outcomes: on pass it is what the builder
-        # must turn green; on fail it shows the suite already passing (vacuous).
-        report.check("RED", red.returncode != 0,
-                     f"bun test exit {red.returncode}\n{tail}" if red.returncode != 0
-                     else f"suite already passes on the pre-build tree — it has "
-                          f"tested nothing (exit 0)\n{tail}")
+
+        gen_total, gen_failed = tally.get(test_file, (0, 0))
+        fix_total, fix_failed = tally.get(fixed_file, (0, 0))
+
+        # A file that throws at module load reports NOTHING, and the process
+        # still exits non-zero — indistinguishable from red by exit code alone.
+        # That is the collision this check exists to name, at test_design time,
+        # while the designer still holds the pen on the file that causes it.
+        report.check("runs", gen_total > 0,
+                     f"{gen_total} test(s) reported under `{command}`" if gen_total
+                     else f"{test_file} produced NO test results under `{command}` — it "
+                          f"runs alone but not alongside {fixed_file}. `bun test` shares "
+                          f"one module registry across the files on its argv (no "
+                          f"--isolate), so a second happy-dom install, a duplicate "
+                          f"global, or a cached `import` of the entry dies here before "
+                          f"a single test executes. Fix it in this file — the builder "
+                          f"cannot, {fixed_file} is not its to edit.\n{tail}")
+
+        # The tail is evidence on BOTH outcomes: on red it is what the builder
+        # must turn green; on green it shows the suite passing already (vacuous).
+        report.check("RED", gen_failed > 0,
+                     f"{gen_failed}/{gen_total} generated test(s) fail on the "
+                     f"pre-build tree\n{tail}" if gen_failed
+                     else (f"all {gen_total} generated test(s) already pass — the suite "
+                           f"has tested nothing\n{tail}" if gen_total
+                           else "not assessable — the suite reported no results"))
+
+        report.check("fixed suite green", fix_total > 0 and fix_failed == 0,
+                     f"{fix_total} test(s) in {fixed_file} still pass alongside it"
+                     if fix_total and not fix_failed
+                     else (f"{fix_failed}/{fix_total} test(s) in {fixed_file} FAIL when "
+                           f"run alongside {test_file} — the generated suite has "
+                           f"poisoned the guard on existing behavior\n{tail}"
+                           if fix_total
+                           else f"{fixed_file} reported no results under `{command}`"
+                                f"\n{tail}"))
     else:
-        report.check("parses", False, "not run — containment failed")
-        report.check("RED", False, "not run — containment failed")
+        for name in ("parses", "runs", "RED", "fixed suite green"):
+            report.check(name, False, "not run — containment failed")
 
     diff = _cmd(["git", "diff", "--name-only", "--", manifest.app.test_file])
     dirty = diff.stdout.strip()
