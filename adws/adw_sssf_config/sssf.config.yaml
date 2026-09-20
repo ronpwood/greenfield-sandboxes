@@ -2,7 +2,18 @@
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
   coding_agent: pi
-  model: openrouter/deepseek/deepseek-v4-flash-0731   # provider/id — provider half is the pi provider name
+  # 2026-09-20: promoted from deepseek-v4-flash-0731. The 09-20 A/B did not clear
+  # v4.1 on its own evidence (speed inside the noise floor, tool-error edge
+  # directional only, quality split), and the stated condition for revisiting was
+  # "fix the harness first, then re-run" — because that A/B could not separate a
+  # worse model from a model fighting the harness. The harness is fixed and
+  # validated (hfix-20260920-062b46: the builder reached product code on call 7
+  # instead of call 35). Ron's call, on the reasoning that the newest model is the
+  # one worth testing against going forward.
+  # 0731 stays in the guest models.json.tmpl, so reverting this line is a one-word
+  # edit with no re-provisioning — the same rule that kept glm-5.2 and
+  # gemini-3.6-flash registered after their swaps.
+  model: openrouter/deepseek/deepseek-v4.1-flash      # provider/id — provider half is the pi provider name
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []          # pi extensions loaded into the harness (-e)
   # Roster-wide allowlist; any agent may override with its own list.
