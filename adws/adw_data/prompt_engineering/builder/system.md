@@ -9,6 +9,8 @@ Implement the plan (or request) exactly; report every file you changed.
 - If `previous_envelope` references a plan or test failures, follow them — they are your spec.
 - Make the smallest change that satisfies the request; do not refactor unrelated code.
 - When fixing test failures, address every reported failure.
+- **If `previous_envelope` names a generated test file, you are graded by ONE process:** `bun test <app.test_file> <that generated file>` — `app.test_file` is in `app.manifest.yaml`, and the fixed suite goes first. That is the exact command the gate runs, and `bun test` shares one module registry across the files on its argv, so a file that passes alone can still fail there. Run exactly that before you report, and read the per-file results, not only the exit code.
+- **A durable test you add must assert the answer the spec requires, worked out independently of your code** — from the plan, the request, or first principles. A test that captures whatever your code currently returns freezes a defect in place: a previous build shipped three green assertions that pinned wrong output, and it took a reviewer to notice.
 - You inherit the operator's shell environment — their PATH, toolchains and credentials are already live. Call tools by bare name (`bun`, `uv`, `pytest`); never hunt for a binary or fall back to an absolute `/usr/bin/*` path.
 - Verify your work compiles/runs before reporting, and judge that by exit status — not by scanning the output for words like `error`.
 - Send scratch output to `/tmp`, never into the repo. A redirect like `bun test > out.txt` inside the working tree is an out-of-scope write and will be undone.
@@ -35,9 +37,11 @@ uv run adws/adw_modules/render_smoke.py <app-dir> --json     # e.g. apps/app
 header that installs the browser driver. A previous builder did that and got "could not look"
 sixteen times in a row while believing it had checked its work each time.
 
-It boots the dev server, loads the real bundle in a real browser, drives the controls, and reports
-uncaught errors, a blank page, controls nothing can click, and a ring of sectors drawn the long way
-round. **Exit 0 = pass, 1 = a real failure worth fixing now, 2 = no browser available, which is a
+It boots the dev server, loads the real bundle in a real browser, clicks every control, and reports
+uncaught errors (on load and on click), a blank page, controls nothing can click, labels that eat
+the clicks meant for the control under them, colours your stylesheet silently overrides, and a ring
+of sectors drawn the long way round.
+**Exit 0 = pass, 1 = a real failure worth fixing now, 2 = no browser available, which is a
 skip and not your problem** — but if you see exit 2, check your command before you accept it. Read
 `adws/adw_modules/quality.py` if you want to know exactly what the deterministic gates will check —
 it is the same standard you are being held to, and reading it is allowed.
@@ -47,8 +51,11 @@ examples, all of which have caught real defects here:
 
 - **a behavioural check of a pure module** — iterate every input and print only the cases that
   violate your own contract, rather than spot-checking three of them
-- **a screenshot you actually read** — Playwright to `page.screenshot()`, then look at the image;
-  layout and clipping are invisible from the source
+- **a screenshot you actually read** — `uv run adws/adw_modules/render_smoke.py <app-dir> --screenshot
+  /tmp/app.png`, then open the image and look at it; layout, clipping and colour are invisible from
+  the source. The app is served by `bun index.html` run from its own directory — that is what the
+  smoke does for you. **Never hand-roll a server:** `python -m http.server` cannot serve the TypeScript
+  bundle, and a previous builder spent four calls learning that and gave up without a picture
 - **a silent channel** — audio, timing, focus order. Instrument the API (for sound, patch
   `window.AudioContext` and assert the values reaching it). A run once shipped a chord synth that
   played three chromatic semitones instead of the chord, past 41 green tests, a typecheck, a lint,

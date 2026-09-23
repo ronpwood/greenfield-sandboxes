@@ -26,12 +26,27 @@ typecheck and every test green, and two of them did not work:
          and the reviewer are for. Do not "fix" this by widening the interactive
          heuristic to every SVG path — that trades a real signal for noise.
 
-So the honest scope is five things nothing else in the chain checks:
+So the honest scope is seven things nothing else in the chain checks:
   A  the REAL bundle loads in a REAL browser with no uncaught error
   B  it renders something
   C  no interactive element is completely unreachable (occlusion)
   D  clicking the controls throws nothing and does not blank the page
   E  a ring of pie/annular sectors is not drawn the long way round
+  F  colours written as SVG attributes are not all overridden by one CSS rule
+  G  a ring of sibling controls is not covered, every one, by text that eats the click
+
+F and G were added 2026-09-23, after `hfix-20260920-062b46` PASSED this gate
+with 96 badges that all painted one grey (a `.note-badge { fill }`
+rule beat six per-role `fill` attributes) and, before its builder noticed by
+accident, a wheel whose key labels swallowed every click. Both are stated as
+SIBLING signatures, like E -- a whole group must show the fault -- so a lone
+tooltip or one recoloured icon never fires. Calibrated on 22 harvested apps
+(`sandbox_mount/host/render_smoke_corpus.sh`): F hit hfix only. G hit hfix's
+wheel and FOUR apps that had passed every gate and the fan-out judging (gf-3,
+gf2-3, gf3-4, gf4-solo). Each was confirmed by clicking: the bare segment
+changes the app, the label on it does nothing, 4/4 per ring. Zero false
+positives. This is the gf3-6 class above, caught wherever the sectors ARE
+detectable controls; gf3-6 itself stays out of scope for the reason given.
 
 Assertion E was added after `fixval-20260919-250a64` PASSED this gate and
 shipped a twelve-slice radial wheel whose wedges each swept 330 degrees
@@ -48,6 +63,14 @@ it fails fixval, and passes the two apps known to be correct.
 Assertion D is new signal outright: every gate we have is load-time, and part B
 item 11 ("survives interaction") has until now been a manual judgement.
 
+Until 2026-09-23, D clicked exactly ONE control on any app that re-renders on
+click (7 of 18 harvested apps): the first click wiped every data-smoke-id
+stamp and each later click timed out silently. It now re-finds each control by
+group + label + ordinal, reloading to the starting state if an earlier click
+navigated away. First corpus result: coverage 1/25 -> 25/25 on hfix, dsctl,
+dsv41 and gf3-3, and one real defect nothing had seen -- gf4-solo throws
+`Unknown note name: E#` on a single click of its D#m sector.
+
 FALSE POSITIVES ARE THE FAILURE MODE TO FEAR. `typescript/no-explicit-any` was
 measured and REJECTED for `run_verify` because it failed working code; the same
 bar applies here. Two deliberate concessions:
@@ -60,7 +83,13 @@ bar applies here. Two deliberate concessions:
     `cursor: pointer`. Anything vaguer produces noise.
 
 Usage:
-    ./render_smoke.py <app_dir> [--json] [--max-clicks N]      # or: uv run render_smoke.py ...
+    ./render_smoke.py <app_dir> [--json] [--max-clicks N] [--screenshot /tmp/app.png]
+                                                               # or: uv run render_smoke.py ...
+
+--screenshot saves a full-page PNG of the app as it first renders (before any
+click), from the same dev server and browser the checks use. It is written even
+when a check fails -- that is when a picture helps most. The path must be
+OUTSIDE the repo (scratch goes to /tmp); a path inside the working tree exits 2.
 
 Do NOT run it as `python3 render_smoke.py`: the shebang is `uv run`, which is
 what installs the PEP-723 dependencies, and a bare interpreter skips that. It
@@ -77,6 +106,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -194,11 +224,49 @@ PROBE_JS = r"""
     return false;
   };
 
+  // G: dead text sitting on top of a control. MEASURED on hfix-20260920-062b46:
+  // each wheel segment <path> had its key label as a SIBLING <text> drawn above
+  // it, with no handler and no `pointer-events: none`, so clicks on the label --
+  // the obvious place to click -- went nowhere. C passed, because each segment's
+  // bare rim still reached it. So this does not ask "is anything reachable"; it
+  // walks the WHOLE grid and counts points that land on non-interactive text
+  // that is not part of the control. The verdict-side rule (a whole ring of
+  // siblings, all overlaid) is applied in Python on the aggregate.
+  const hasOwnText = (n) => [...n.childNodes].some(c => c.nodeType === 3 && c.textContent.trim());
+  const deadText = (el, hit) => {
+    if (hit === el || el.contains(hit)) return null;
+    // bun's dev error overlay covers everything on a crashed app; A already
+    // reports the crash, so do not double-count it here (measured: gf2-1, gf2-4).
+    if (hit.closest && hit.closest('bun-hmr')) return null;
+    const t = (hit.closest && hit.closest('text')) || (hasOwnText(hit) ? hit : null);
+    if (!t) return null;
+    for (let p = t; p; p = p.parentElement) if (isInteractive(p)) return null;
+    return t;
+  };
+  const deadTextPoints = (el, r) => {
+    let n = 0, by = null;
+    for (const fx of FRACS) {
+      for (const fy of FRACS) {
+        const x = Math.min(innerWidth - 1, Math.max(0, r.left + r.width * fx));
+        const y = Math.min(innerHeight - 1, Math.max(0, r.top + r.height * fy));
+        const hit = document.elementFromPoint(x, y);
+        const t = hit && deadText(el, hit);
+        if (!t) continue;
+        n += 1;
+        if (!by) by = t.tagName.toLowerCase() +
+          (t.getAttribute('class') ? '.' + String(t.getAttribute('class')).split(/\s+/)[0] : '') +
+          ' "' + (t.textContent || '').trim().slice(0, 12) + '"';
+      }
+    }
+    return { n, by };
+  };
+
   const out = [];
   candidates.forEach((el, i) => {
     const r = el.getBoundingClientRect();
     if (!isVisible(el, r)) return;
     const seen = { occluder: null };
+    const dead = deadTextPoints(el, r);
     let reachable = probe(el, r, seen);
     if (!reachable) {
       for (const d of el.querySelectorAll('*')) {
@@ -214,8 +282,67 @@ PROBE_JS = r"""
       tag: el.tagName.toLowerCase(),
       cls: (el.getAttribute('class') || '').slice(0, 40),
       label, reachable, occluder: seen.occluder,
+      group: el.tagName.toLowerCase() + '.' + String(el.getAttribute('class') || '').split(/\s+/)[0],
+      deadTextPoints: dead.n, deadTextBy: dead.by,
     });
   });
+
+  // F: a colour the author wrote that never reaches the screen. MEASURED on
+  // hfix-20260920-062b46: 96 note badges each carried a per-role `fill`
+  // presentation ATTRIBUTE, and one stylesheet rule (`.note-badge { fill: ... }`)
+  // beat all of them -- CSS outranks presentation attributes -- so every badge
+  // computed to the same grey and no scale shape was visible. Group by tag +
+  // class; when the attributes say >=2 colours and the computed style says 1,
+  // the author's intent was discarded wholesale. Attribute colours are
+  // normalised through a canvas so "#fff" and "white" count as one.
+  const norm = (() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    return (v) => {
+      if (!ctx) return v;
+      ctx.fillStyle = '#010203';
+      ctx.fillStyle = v;
+      const got = ctx.fillStyle;
+      return got === '#010203' && v.trim().toLowerCase() !== '#010203' ? v.trim().toLowerCase() : got;
+    };
+  })();
+  const SKIP_COLOUR = /^(none|transparent|currentcolor|inherit)$|^url\(/i;
+  const colourGroups = [];
+  for (const prop of ['fill', 'stroke']) {
+    const groups = {};
+    for (const el of document.querySelectorAll(`svg [${prop}]`)) {
+      const attr = (el.getAttribute(prop) || '').trim();
+      if (!attr || SKIP_COLOUR.test(attr)) continue;
+      const key = el.tagName.toLowerCase() + '.' + String(el.getAttribute('class') || '').split(/\s+/)[0];
+      const g = (groups[key] = groups[key] || { attrs: new Set(), computed: new Set(), n: 0 });
+      g.n += 1;
+      g.attrs.add(norm(attr));
+      g.computed.add(getComputedStyle(el)[prop]);
+    }
+    for (const [group, g] of Object.entries(groups)) {
+      if (g.n < 3) continue;
+      colourGroups.push({ group, prop, n: g.n, attrDistinct: g.attrs.size,
+                          computedDistinct: g.computed.size,
+                          computed: [...g.computed].slice(0, 6),
+                          fault: g.attrs.size >= 2 && g.computed.size === 1 });
+    }
+  }
+
+  // Report-only: elements that declare a role (data-role) -- how many roles,
+  // and how many colours actually paint them. A legend that advertises five
+  // roles over one painted colour is the symptom F explains; this is the
+  // symptom itself, measured whatever the cause.
+  const roleGroups = {};
+  for (const el of document.querySelectorAll('[data-role]')) {
+    const key = el.tagName.toLowerCase() + '.' + String(el.getAttribute('class') || '').split(/\s+/)[0];
+    const g = (roleGroups[key] = roleGroups[key] || { roles: new Set(), fills: new Set(), n: 0 });
+    g.n += 1;
+    g.roles.add(el.getAttribute('data-role'));
+    const cs = getComputedStyle(el);
+    g.fills.add(el instanceof SVGElement ? cs.fill : cs.backgroundColor);
+  }
+  const roleColours = Object.entries(roleGroups)
+    .filter(([, g]) => g.n >= 3 && g.roles.size >= 2)
+    .map(([group, g]) => ({ group, n: g.n, roles: g.roles.size, colours: g.fills.size }));
   // E: pie sectors that sweep the wrong way round.
   //
   // MEASURED on fixval-20260919-250a64, which this gate PASSED: all twelve
@@ -302,7 +429,7 @@ PROBE_JS = r"""
     });
   }
 
-  return { controls: out, sectorFaults,
+  return { controls: out, sectorFaults, colourGroups, roleColours,
            textLength: (document.body.innerText || '').trim().length };
 }
 """
@@ -338,7 +465,52 @@ def _reexec_under_uv() -> None:
     raise SystemExit(proc.returncode)
 
 
-def run(app_dir: str, max_clicks: int) -> dict:
+def _interceptor(message: str) -> str | None:
+    """The element Playwright says swallowed a click, if it named one."""
+    m = re.search(r"(<.+?>.*?)\s+intercepts pointer events", message)
+    return m.group(1).strip()[:120] if m else None
+
+
+# G's verdict-side rule, stated narrowly like E's: a RING of sibling controls
+# (>=3 sharing tag + first class), EVERY one with dead text on top. One
+# overlaid control is a tooltip or a badge; a whole ring is a wheel whose
+# labels swallow the clicks.
+DEAD_RING_MIN = 3
+
+
+def dead_text_rings(controls: list[dict]) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for c in controls:
+        groups.setdefault(c.get("group", ""), []).append(c)
+    rings = []
+    for group, members in groups.items():
+        if len(members) < DEAD_RING_MIN:
+            continue
+        overlaid = [m for m in members if m.get("deadTextPoints", 0) > 0]
+        if not overlaid:
+            continue
+        rings.append({
+            "group": group, "controls": len(members), "withOverlay": len(overlaid),
+            "occluder": overlaid[0].get("deadTextBy"),
+            "fault": len(overlaid) == len(members),
+        })
+    return rings
+
+
+def _signatures(controls: list[dict]) -> dict[str, tuple]:
+    """{control id: signature}. A signature is what survives a re-render --
+    group, label, and ordinal among controls sharing both -- so a control can
+    be found again after the app has rebuilt its DOM (see the D loop)."""
+    seen: dict[tuple, int] = {}
+    out = {}
+    for c in controls:
+        base = (c.get("group", ""), c.get("label", ""))
+        out[c["id"]] = (*base, seen.get(base, 0))
+        seen[base] = seen.get(base, 0) + 1
+    return out
+
+
+def run(app_dir: str, max_clicks: int, screenshot: str | None = None) -> dict:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -360,7 +532,8 @@ def run(app_dir: str, max_clicks: int) -> dict:
     env = {**os.environ, "PORT": str(port)}
     server = subprocess.Popen(["bun", "index.html"], cwd=str(app), env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    report: dict = {"errors": [], "console": [], "unreachable": [], "click_failures": []}
+    report: dict = {"errors": [], "console": [], "unreachable": [], "click_failures": [],
+                    "click_blocked": []}
     try:
         if not _wait_for_port(port, server, SERVER_BOOT_TIMEOUT):
             out = ""
@@ -385,6 +558,9 @@ def run(app_dir: str, max_clicks: int) -> dict:
 
             page.goto(f"http://localhost:{port}/", wait_until="load", timeout=30_000)
             page.wait_for_timeout(600)      # let a rAF/microtask render settle
+            if screenshot:
+                page.screenshot(path=screenshot, full_page=True)
+                report["screenshot"] = screenshot
 
             probe = page.evaluate(PROBE_JS)
             # Freeze what happened BEFORE any click. Without this an error raised
@@ -399,20 +575,72 @@ def run(app_dir: str, max_clicks: int) -> dict:
             # wheel drawn wrong is wrong on arrival, and a click that redraws it
             # must not be able to launder the fault.
             report["sectorFaults"] = probe.get("sectorFaults", [])
+            # F and the role measurement: report-only until calibrated (see
+            # specs/render-content-and-prompt-gaps.md, Phase 3).
+            report["colourGroups"] = probe.get("colourGroups", [])
+            report["roleColours"] = probe.get("roleColours", [])
+            report["deadTextRings"] = dead_text_rings(probe["controls"])
 
             # D: drive it. Clicking is what part B item 11 measures by hand, and
             # nothing in the chain has ever done it.
             clickable = [c for c in probe["controls"] if c["reachable"]][:max_clicks]
+            report["clickable"] = len(clickable)
+            report["clicked"] = 0
+            report["click_stale"] = 0
+            report["reprobes"] = 0
+            wanted = _signatures(probe["controls"])
+            report["reloads"] = 0
+
+            def refind(c: dict) -> str | None:
+                fresh = page.evaluate(PROBE_JS)["controls"]
+                sigs = _signatures(fresh)
+                found = {sigs[f["id"]]: f for f in fresh if f["reachable"]}
+                match = found.get(wanted[c["id"]])
+                return f'[data-smoke-id="{match["id"]}"]' if match else None
+
             for c in clickable:
+                # MEASURED 2026-09-23 on hfix: an app that re-renders on click
+                # wipes every data-smoke-id stamp (41 -> 0 after the first
+                # click), so every later click timed out on a selector that no
+                # longer existed -- and D clicked exactly ONE control on 7 of 18
+                # harvested apps. So when a stamp is gone, re-probe and find the
+                # same control again by what a user would recognise it by
+                # (group + label + ordinal). If an earlier click navigated away
+                # from it (hfix: the tab buttons come before the wheel, and the
+                # Quiz tab has no wheel), reload to the starting state and look
+                # there. Only a control absent even from a fresh load is stale.
+                sel = f'[data-smoke-id="{c["id"]}"]'
+                if page.locator(sel).count() == 0:
+                    report["reprobes"] += 1
+                    sel = refind(c)
+                    if sel is None:
+                        report["reloads"] += 1
+                        page.goto(page.url, wait_until="load", timeout=30_000)
+                        page.wait_for_timeout(600)
+                        sel = refind(c)
+                    if sel is None:
+                        report["click_stale"] += 1
+                        continue
+                # Counted HERE, after any reload: a reload replays load-time
+                # console output, which must not be blamed on this click.
                 before = len(report["errors"]) + len(report["console"])
                 try:
-                    page.click(f'[data-smoke-id="{c["id"]}"]',
+                    page.click(sel,
                                timeout=1500, force=False, no_wait_after=True)
                     page.wait_for_timeout(60)
-                except Exception:
+                    report["clicked"] += 1
+                except Exception as e:
                     # A control that cannot be clicked in 1.5s is not itself a
                     # defect (animations, transient overlays); C already covers
                     # genuine unreachability. Only THROWN errors count here.
+                    # But the timeout often NAMES the culprit -- hfix's said
+                    # `<text class="label">G</text> intercepts pointer events`
+                    # 58 times and this loop used to throw that away -- so keep
+                    # it as evidence. Never a failure on its own.
+                    report["click_blocked"].append({
+                        "control": f'{c["tag"]}.{c["cls"]} "{c["label"]}"',
+                        "occluder": _interceptor(str(e)),
+                    })
                     continue
                 if len(report["errors"]) + len(report["console"]) > before:
                     report["click_failures"].append({
@@ -462,20 +690,63 @@ def verdict(r: dict) -> tuple[bool, list[str]]:
             f"({g['degreesDrawn']}deg in total, and a circle is 360). Every slice is "
             f"painting over the whole ring. Set the flag to 0 for any sector under 180deg "
             f"— e.g. `const large = Math.abs(to - from) > 180 ? 1 : 0`.")
+    for g in r.get("deadTextRings", []):
+        if not g["fault"]:
+            continue
+        failures.append(
+            f"All {g['controls']} `{g['group']}` controls have text drawn on top of them that "
+            f"does not take the click (e.g. {g['occluder']}). A user clicks the label -- the "
+            f"obvious target -- and nothing happens; only the bare edge of each control works. "
+            f"Give the labels `pointer-events: none` (CSS or attribute) so clicks fall through "
+            f"to the control, or put each label inside its control so the click bubbles to it.")
+    for g in r.get("colourGroups", []):
+        if not g["fault"]:
+            continue
+        failures.append(
+            f"{g['n']} `{g['group']}` elements set {g['attrDistinct']} different `{g['prop']}` "
+            f"colours as SVG attributes, but every one of them paints {g['computed'][0]}. Some "
+            f"stylesheet rule matching these elements sets `{g['prop']}`, and CSS beats presentation "
+            f"attributes, so the per-element colours never reach the screen. Find that rule (grep "
+            f"your styles for `{g['prop']}:`), and remove `{g['prop']}` from it or set the colour "
+            f"with an inline `style` instead of the attribute.")
     return (not failures), failures
 
 
+def _inside_repo(path: str) -> bool:
+    """Is `path` inside the git working tree we were run from? Scratch output
+    in the repo is an out-of-scope write the chain undoes -- refuse it early."""
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                             text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    target = Path(path).expanduser().resolve()
+    return target == Path(top).resolve() or Path(top).resolve() in target.parents
+
+
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    argv = sys.argv[1:]
+    screenshot = None
+    for i, a in enumerate(argv):
+        if a.startswith("--screenshot="):
+            screenshot = a.split("=", 1)[1]
+        elif a == "--screenshot" and i + 1 < len(argv):
+            screenshot = argv[i + 1]
+    args = [a for i, a in enumerate(argv)
+            if not a.startswith("--") and not (i > 0 and argv[i - 1] == "--screenshot")]
     if not args:
         print(__doc__, file=sys.stderr)
         return 2
+    if screenshot and _inside_repo(screenshot):
+        print(f"render_smoke: --screenshot {screenshot} is inside the repo; "
+              f"write it to /tmp instead (e.g. /tmp/app.png).", file=sys.stderr)
+        return 2
     max_clicks = DEFAULT_MAX_CLICKS
-    for a in sys.argv[1:]:
+    for a in argv:
         if a.startswith("--max-clicks"):
             max_clicks = int(a.split("=", 1)[1]) if "=" in a else max_clicks
 
-    report = run(args[0], max_clicks)
+    report = run(args[0], max_clicks, screenshot)
     ok, failures = verdict(report)
 
     if "--json" in sys.argv:
@@ -483,6 +754,23 @@ def main() -> int:
     else:
         print(f"render_smoke: {report.get('controlCount', 0)} interactive element(s), "
               f"{report.get('textLength', 0)} chars rendered")
+        if report.get("screenshot"):
+            print(f"render_smoke: screenshot saved to {report['screenshot']} -- read it")
+        # Measurements, reported whether or not they fail anything, so the next
+        # defect in these classes is visible even below a threshold.
+        blocked = report.get("click_blocked", [])
+        rings = [g for g in report.get("deadTextRings", []) if g["fault"]]
+        colour = [g for g in report.get("colourGroups", []) if g["fault"]]
+        print(f"render_smoke: measured — clicked {report.get('clicked', 0)} of "
+              f"{report.get('clickable', 0)} ({report.get('click_stale', 0)} not found even after a reload), "
+              f"{len(blocked)} click(s) blocked, "
+              f"{len(rings)} control ring(s) under dead text, "
+              f"{len(colour)} colour group(s) overridden by CSS")
+        for g in rings:
+            print(f"  dead text: all {g['controls']} {g['group']} covered by {g['occluder']}")
+        for g in colour:
+            print(f"  overridden: {g['n']} {g['group']} set {g['attrDistinct']} {g['prop']} "
+                  f"colours, all paint {g['computed'][0]}")
         if ok:
             print("render_smoke: PASS — loads, draws, every control reachable, "
                   "no error while driving it")
