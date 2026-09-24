@@ -649,8 +649,13 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
                 # from it (hfix: the tab buttons come before the wheel, and the
                 # Quiz tab has no wheel), reload to the starting state and look
                 # there. Only a control absent even from a fresh load is stale.
+                # A stamp that survives but is HIDDEN is the same case. MEASURED
+                # 2026-09-24 on harn3: a tab click collapsed the wheel's panel,
+                # its sectors kept their stamps, and D spent 16 timeouts waiting
+                # on "element is not visible" -- 9/25 clicked on an app whose
+                # sectors all work.
                 sel = f'[data-smoke-id="{c["id"]}"]'
-                if page.locator(sel).count() == 0:
+                if page.locator(sel).count() == 0 or not page.locator(sel).first.is_visible():
                     report["reprobes"] += 1
                     sel = refind(c)
                     if sel is None:
