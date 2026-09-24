@@ -28,6 +28,14 @@ class GateFailure(RuntimeError):
     pass
 
 
+class ProviderError(RuntimeError):
+    """The provider failed the send; the model never got to answer.
+
+    Its message starts with `provider_error`, so a trace query can split the
+    classes: `select error from phases where error like 'provider_error%'`.
+    """
+
+
 # ── config ───────────────────────────────────────────────────────────────────
 
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
@@ -100,6 +108,9 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                           "coding_agent": agent.coding_agent,
                                           "purpose": agent.purpose,
                                           "tools": agent.tools,  # None = all tools
+                                          # the ceiling the context curve is read against
+                                          "context_window": agent_pi.context_window(
+                                              *agent_pi.resolve_model(agent.model)),
                                           "harness_engineering": agent.harness_engineering}))
     run.console.agent_started(agent.name, agent.model, session_id)
 
@@ -245,6 +256,11 @@ def _event_forwarder(run, phase: Phase, agent_name: str):
     tracker = agent_pi.ToolCallTracker()
 
     def forward(event: dict) -> None:
+        turn = agent_pi.context_record(event)
+        if turn is not None:
+            run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                         type="context", name=f"{turn['context_tokens']:,} tokens",
+                                         payload={**turn, "agent": agent_name}))
         for message in agent_pi.assistant_message_records(event):
             run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                          type=message.pop("kind"),
@@ -281,6 +297,14 @@ def _parse_with_retries(run, phase: Phase, call: AgentCall, result, send):
     """Parse the final response against the declared output type; on failure,
     continue the SAME session with a correction (bounded)."""
     for attempt in range(1, JSON_FIX_ATTEMPTS + 2):
+        # A provider error reaches us only after pi's own transient retry, so
+        # it is final for this send. Correcting "your JSON" into the same broken
+        # path just spends sends and blames the model: a 401 was once recorded
+        # as "planner never produced valid PlanOutput JSON" (adw 0d0e8411).
+        if getattr(result, "stop_reason", None) == "error":
+            agent = resolve(run.cfg, phase.params.owner)
+            raise ProviderError(f"provider_error ({agent.model}): "
+                                f"{(result.error_message or 'no errorMessage')[:400]}")
         try:
             payload = _extract_json(result.text)
             return call.output_type.model_validate(payload), attempt

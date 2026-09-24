@@ -485,3 +485,8 @@ class PiResult(BaseModel):
     # visualizer's context bar measures against `context_window`.
     context_tokens: int = 0
     context_window: int = 0         # 0 when the registry declares no ceiling
+    # The LAST assistant turn's stopReason and errorMessage. "error" means the
+    # provider failed the send (a 401, a 5xx pi gave up retrying), so the empty
+    # text is not the model's fault and must not be parsed as if it were.
+    stop_reason: Optional[str] = None
+    error_message: str = ""

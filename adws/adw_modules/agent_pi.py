@@ -166,6 +166,27 @@ def assistant_message_records(event: dict) -> list[dict]:
     return records
 
 
+def context_record(event: dict) -> Optional[dict]:
+    """Occupancy after one assistant turn, for the per-turn context curve.
+
+    One per VALID turn: aborted and errored turns are skipped, the same rule
+    `run` uses for `PiResult.context_tokens`, so the curve's last point equals
+    that summary. Emitted for every turn, not stamped on agent_message: most
+    builder turns are tool calls with no text (harn2: 12 agent_message events
+    across 68 tool calls), so a stamp there would sample the curve at the
+    final answers only.
+    """
+    if event.get("type") != "message_end":
+        return None
+    message = event.get("message", {}) or {}
+    if message.get("role") != "assistant":
+        return None
+    if message.get("stopReason") in ("aborted", "error"):
+        return None
+    tokens = _context_tokens(message.get("usage", {}) or {})
+    return {"context_tokens": tokens, "stop_reason": message.get("stopReason")} if tokens else None
+
+
 def _label(tool: str, args: dict) -> str:
     """One-line human name for a tool call: `bash: ls -la src`."""
     value = next((args[key] for key in PRIMARY_ARGS
@@ -380,6 +401,10 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
                     text = _text_of(message)
                     if text:
                         result.text = text   # last assistant message wins
+                    # Every turn overwrites these, so a turn pi retried
+                    # successfully clears an earlier transient error.
+                    result.stop_reason = message.get("stopReason")
+                    result.error_message = message.get("errorMessage") or ""
                     usage = message.get("usage", {}) or {}
                     turn = _context_tokens(usage)
                     result.tokens += turn

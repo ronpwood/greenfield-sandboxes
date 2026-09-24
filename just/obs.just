@@ -43,6 +43,15 @@ phases ADW_ID:
 tail ADW_ID:
     sqlite3 adws/adw_data/sssf.db "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
 
+# One row per VALID assistant turn (a `context` event), so the curve shows WHEN
+# the window grew, not only its peak. Its last row per agent equals that agent's
+# agent_sessions.context_tokens. DB defaults to the local trace; pass a harvested
+# one to read a sandbox run: .sandbox/traces/<run-id>/sssf.db
+
+# context occupancy per turn: just obs context-curve <adw_id> [db]
+context-curve ADW_ID DB="adws/adw_data/sssf.db":
+    sqlite3 -column -header "{{DB}}" "select json_extract(e.payload_json,'$.agent') as agent, p.name as phase, row_number() over (partition by json_extract(e.payload_json,'$.agent') order by e.rowid) as turn, json_extract(e.payload_json,'$.context_tokens') as context_tokens, case when s.context_window > 0 then printf('%.1f%%', 100.0 * json_extract(e.payload_json,'$.context_tokens') / s.context_window) else '?' end as of_window from events e join phases p on p.phase_id = e.phase_id left join agent_sessions s on s.adw_id = e.adw_id and s.agent = json_extract(e.payload_json,'$.agent') where e.adw_id = '{{ADW_ID}}' and e.type = 'context' order by agent, e.rowid;"
+
 # what a run is running right now: just obs procs <adw_id>
 procs ADW_ID:
     sqlite3 adws/adw_data/sssf.db "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"

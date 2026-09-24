@@ -247,6 +247,42 @@ def tests_red(envelope: EnvelopeBase, run) -> GateReport:
     return report
 
 
+def durable_suite_count(repo_root) -> int | None:
+    """Tests in the durable (fixed) suite, counted by bun's own junit reporter.
+
+    The argv is `quality.tests_argv()`, by call and not by copy -- the same
+    command that grades a build, so the count is what the grade sees. None when
+    the file reported nothing (it failed to load): absence, not a zero.
+    """
+    fixed_file = load_manifest().app.test_file
+    with tempfile.TemporaryDirectory() as tmp:
+        junit = Path(tmp) / "durable.xml"
+        subprocess.run(quality.tests_argv() + ["--reporter=junit", f"--reporter-outfile={junit}"],
+                       cwd=repo_root, capture_output=True, text=True)
+        tally = _junit_tally(junit)
+    return tally[fixed_file][0] if fixed_file in tally else None
+
+
+def durable_suite_growth(baseline: int | None):
+    """Gate factory: REPORT how the durable suite grew since `commit_tests`. Never fails.
+
+    Report-only on purpose. "The durable suite must grow" is trivially met by
+    pinning whatever the code returns -- exactly hfix's app.test.ts:423-436,
+    three new assertions that locked in a defect. A count answers "did it
+    grow"; only a reader answers "did it grow correctly". So this is context
+    for the reviewer, never a correction sent to the builder.
+    """
+    def durable_suite_growth(envelope: EnvelopeBase, run) -> GateReport:
+        now = durable_suite_count(run.repo_root)
+        if now is None or baseline is None:
+            note = (f"not counted: the durable suite reported no results "
+                    f"(baseline {baseline}, now {now}); the quality phase owns failing on that")
+        else:
+            note = f"durable suite: {baseline} → {now} ({now - baseline:+d})"
+        return GateReport().check("durable suite growth", True, note)
+    return durable_suite_growth
+
+
 def tests_pass(command: str):
     """Gate factory: the given shell command must exit 0."""
     def gate(envelope: EnvelopeBase, run) -> GateReport:

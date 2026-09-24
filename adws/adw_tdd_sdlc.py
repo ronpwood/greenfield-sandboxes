@@ -131,12 +131,17 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Land the red suite before the build — the fourth "
                                            "work product gets its own commit and author")) as ph:
         commit(ph, test_design)
+        # The count the builder's growth is measured against, once, on the
+        # committed red tree: nothing the builder does can move it.
+        durable_baseline = gates.durable_suite_count(run.repo_root)
+        ph.log(durable_tests=durable_baseline)
+    growth = gates.durable_suite_growth(durable_baseline)
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan; the red suite in the previous "
                                            "envelope is the finish line")) as ph:
         build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=test_design,
-                                  gates=[gates.diff_matches_claims]))
+                                  gates=[gates.diff_matches_claims, growth]))
 
     # From here the green bar means BOTH suites, always together: the fixed one
     # (existing behavior survived) and the generated one (new behavior arrived).
@@ -159,7 +164,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                                "verbatim output")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                       previous=quality.as_envelope(test, "tests"),
-                                      gates=[gates.diff_matches_claims]))
+                                      gates=[gates.diff_matches_claims, growth]))
 
     review = None
     revised = False
@@ -177,7 +182,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name=f"revise_{i}", kind="agent", owner="builder", retries=1,
                                    description="Close the reviewer's blocking findings")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=review,
-                                      gates=[gates.diff_matches_claims]))
+                                      gates=[gates.diff_matches_claims, growth]))
             revised = True
 
     # A revision edited code after the suite last ran, so the green light is
