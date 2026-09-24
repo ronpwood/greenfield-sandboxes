@@ -83,13 +83,20 @@ bar applies here. Two deliberate concessions:
     `cursor: pointer`. Anything vaguer produces noise.
 
 Usage:
-    ./render_smoke.py <app_dir> [--json] [--max-clicks N] [--screenshot /tmp/app.png]
+    ./render_smoke.py <app_dir> [--json] [--max-clicks N] [--screenshot /tmp/app.png [--click LABEL ...]]
                                                                # or: uv run render_smoke.py ...
 
 --screenshot saves a full-page PNG of the app as it first renders (before any
 click), from the same dev server and browser the checks use. It is written even
 when a check fails -- that is when a picture helps most. The path must be
 OUTSIDE the repo (scratch goes to /tmp); a path inside the working tree exits 2.
+
+--click LABEL (repeatable, in order) puts the app in a state BEFORE the picture:
+each LABEL is clicked by its visible text, e.g. `--click Triads --click F#`.
+The initial state of a multi-mode app hides most of it (harn2's builder said
+so, unprompted). The clicks happen on a separate page, so every check below
+still starts from a clean load. A label that matches nothing is reported and
+the picture is taken anyway -- read the report line before trusting it.
 
 Do NOT run it as `python3 render_smoke.py`: the shebang is `uv run`, which is
 what installs the PEP-723 dependencies, and a bare interpreter skips that. It
@@ -510,7 +517,36 @@ def _signatures(controls: list[dict]) -> dict[str, tuple]:
     return out
 
 
-def run(app_dir: str, max_clicks: int, screenshot: str | None = None) -> dict:
+def _stage_and_capture(browser, url: str, path: str, clicks: list[str]) -> list[dict]:
+    """Screenshot `url` after clicking each label in order, on a throwaway page."""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.on("dialog", lambda d: d.dismiss())
+    page.goto(url, wait_until="load", timeout=30_000)
+    page.wait_for_timeout(600)
+    done = []
+    for label in clicks:
+        # A button named LABEL first; else any element whose text is exactly
+        # LABEL. force=True clicks at its centre like a user would, so an SVG
+        # <text> label with pointer-events:none hands the click to its segment.
+        target = page.get_by_role("button", name=label, exact=True)
+        if target.count() == 0:
+            target = page.get_by_text(label, exact=True)
+        if target.count() == 0:
+            done.append({"label": label, "clicked": False, "why": "no element with that text"})
+            continue
+        try:
+            target.first.click(timeout=3000, force=True, no_wait_after=True)
+            page.wait_for_timeout(300)
+            done.append({"label": label, "clicked": True})
+        except Exception as e:
+            done.append({"label": label, "clicked": False, "why": str(e).splitlines()[0][:200]})
+    page.screenshot(path=path, full_page=True)
+    page.close()
+    return done
+
+
+def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
+        clicks: list[str] | None = None) -> dict:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -558,7 +594,11 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None) -> dict:
 
             page.goto(f"http://localhost:{port}/", wait_until="load", timeout=30_000)
             page.wait_for_timeout(600)      # let a rAF/microtask render settle
-            if screenshot:
+            if screenshot and clicks:
+                report["screenshot_clicks"] = _stage_and_capture(
+                    browser, f"http://localhost:{port}/", screenshot, clicks)
+                report["screenshot"] = screenshot
+            elif screenshot:
                 page.screenshot(path=screenshot, full_page=True)
                 report["screenshot"] = screenshot
 
@@ -727,13 +767,23 @@ def _inside_repo(path: str) -> bool:
 def main() -> int:
     argv = sys.argv[1:]
     screenshot = None
+    clicks: list[str] = []
     for i, a in enumerate(argv):
         if a.startswith("--screenshot="):
             screenshot = a.split("=", 1)[1]
         elif a == "--screenshot" and i + 1 < len(argv):
             screenshot = argv[i + 1]
+        elif a.startswith("--click="):
+            clicks.append(a.split("=", 1)[1])
+        elif a == "--click" and i + 1 < len(argv):
+            clicks.append(argv[i + 1])
     args = [a for i, a in enumerate(argv)
-            if not a.startswith("--") and not (i > 0 and argv[i - 1] == "--screenshot")]
+            if not a.startswith("--")
+            and not (i > 0 and argv[i - 1] in ("--screenshot", "--click"))]
+    if clicks and not screenshot:
+        print("render_smoke: --click only stages the --screenshot; pass --screenshot too.",
+              file=sys.stderr)
+        return 2
     if not args:
         print(__doc__, file=sys.stderr)
         return 2
@@ -746,7 +796,7 @@ def main() -> int:
         if a.startswith("--max-clicks"):
             max_clicks = int(a.split("=", 1)[1]) if "=" in a else max_clicks
 
-    report = run(args[0], max_clicks, screenshot)
+    report = run(args[0], max_clicks, screenshot, clicks)
     ok, failures = verdict(report)
 
     if "--json" in sys.argv:
@@ -756,6 +806,10 @@ def main() -> int:
               f"{report.get('textLength', 0)} chars rendered")
         if report.get("screenshot"):
             print(f"render_smoke: screenshot saved to {report['screenshot']} -- read it")
+            for c in report.get("screenshot_clicks", []):
+                if not c["clicked"]:
+                    print(f"render_smoke: screenshot --click {c['label']!r} did NOT click "
+                          f"({c['why']}); the picture is not in the state you asked for")
         # Measurements, reported whether or not they fail anything, so the next
         # defect in these classes is visible even below a threshold.
         blocked = report.get("click_blocked", [])

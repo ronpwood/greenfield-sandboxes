@@ -41,7 +41,7 @@ say "commit $(git rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout
 # was a hard pin to 1.3.14. The serving layer no longer depends on it —
 # observe.just fronts the dev server with sandbox_mount/guest/app_proxy.ts,
 # which rewrites Host to localhost — so bun floats again.
-# See specs/toolchain-unpin-and-drift-visibility.md and NEXTSTEPS.md (2026-08-30).
+# See specs/toolchain-unpin-and-drift-visibility.md and CHANGELOG.md (2026-08-30).
 LOCK="${SCRIPT_DIR}/toolchain.lock"
 [[ -f "$LOCK" ]] || { echo "[provision] missing ${LOCK}" >&2; exit 1; }
 lock_want() { awk -v t="$1" '$1==t {print $2}' "$LOCK"; }

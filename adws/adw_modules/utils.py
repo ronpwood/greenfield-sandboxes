@@ -53,13 +53,21 @@ def ensure_dir(path: str | Path) -> Path:
 
 
 def resolve_prompt(arg: str) -> str:
-    """CLI prompt arg: a file path resolves to its contents, else inline text."""
+    """CLI prompt arg: a file path resolves to its contents, else inline text.
+
+    A single-token `*.md` arg that is not a file is refused, not passed through:
+    dsctl, dsv41 and dsv41s ran on a 36-char filename as their whole brief
+    because the prompt existed only in the host repo (CHANGELOG 2026-09-23d).
+    """
     try:
         p = Path(arg)
         if p.is_file():
             return p.read_text()
     except OSError:
         pass
+    if arg.endswith(".md") and not any(c.isspace() for c in arg):
+        raise SystemExit(f"resolve_prompt: {arg} looks like a prompt file but does not "
+                         f"exist here ({Path.cwd()}); refusing to use the filename as the brief")
     return arg
 
 

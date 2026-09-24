@@ -35,7 +35,7 @@ doctor:
 
     # A separate, non-generic check: a bare pass/fail here would hide WHY, and this
     # exact failure mode (right shape, wrong key type — a regular API key, not a
-    # management key) already cost real setup time once. See NEXTSTEPS.md.
+    # management key) already cost real setup time once. See CHANGELOG.md.
     if [ -n "${OPENROUTER_PROVISIONING_KEY:-}" ]; then
         CODE=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://openrouter.ai/api/v1/keys \
                -H "Authorization: Bearer $OPENROUTER_PROVISIONING_KEY" 2>/dev/null || echo "000")

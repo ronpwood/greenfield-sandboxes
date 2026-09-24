@@ -8,7 +8,7 @@
 # Why: on fixval-20260919-250a64 those three seats took 88 of 107 minutes
 # (test_design 40, build+fix+revise 48) with a 2.3% tool-call error rate.
 # This roster exists to find out whether the newer model moves those numbers
-# on its own, BEFORE any further harness change. See NEXTSTEPS 2026-09-20.
+# on its own, BEFORE any further harness change. See CHANGELOG.md 2026-09-20.
 #
 # maxTokens in models.json.tmpl is deliberately 65536 — the same value the
 # 0731 entry carries — so the two arms differ in model id and nothing else.

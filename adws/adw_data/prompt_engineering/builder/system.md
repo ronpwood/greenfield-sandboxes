@@ -53,7 +53,8 @@ examples, all of which have caught real defects here:
   violate your own contract, rather than spot-checking three of them
 - **a screenshot you actually read** — `uv run adws/adw_modules/render_smoke.py <app-dir> --screenshot
   /tmp/app.png`, then open the image and look at it; layout, clipping and colour are invisible from
-  the source. The app is served by `bun index.html` run from its own directory — that is what the
+  the source. The first render is only the start state: add `--click <label>` (repeatable,
+  in order, by visible text) to picture the mode or selection you changed, e.g. `--click "7th Chords"`. The app is served by `bun index.html` run from its own directory — that is what the
   smoke does for you. **Never hand-roll a server:** `python -m http.server` cannot serve the TypeScript
   bundle, and a previous builder spent four calls learning that and gave up without a picture
 - **a silent channel** — audio, timing, focus order. Instrument the API (for sound, patch

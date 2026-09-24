@@ -58,6 +58,19 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     PROMPT={{ quote(PROMPT) }}
     Q=$(printf '%q' "$PROMPT")
 
+    # A `*.md` PROMPT must exist in the SANDBOX'S checkout, not just the host's:
+    # resolve_prompt used to fall back to the filename as inline text, and three
+    # arms were planned from a 36-char filename (CHANGELOG 2026-09-23d). Refuse
+    # here, before detaching, so the failure is an exit code and not a run.log.
+    case "$PROMPT" in
+        *[[:space:]]*) ;;
+        *.md)
+            ssh "$VM".exe.xyz "cd app && test -f $Q" < /dev/null || {
+                echo "execute {{RUN_ID}}: prompt file $PROMPT is not in the sandbox checkout on $VM — commit/sync it to the target, or pass the text" >&2
+                exit 1
+            } ;;
+    esac
+
     # Same two-hop treatment for the roster path, and the whole flag collapses to
     # the empty string when no config was asked for — so the default call site
     # builds the exact command it built before this argument existed.

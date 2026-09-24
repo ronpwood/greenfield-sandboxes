@@ -159,7 +159,7 @@ teardown RUN_ID *FLAGS:
 
     # ── 4. dirty working tree check ---------------------------------------------
     # harvest only pulls committed history via a bundle — uncommitted work on the
-    # VM is invisible to it. This is the one irreversible mistake NEXTSTEPS.md
+    # VM is invisible to it. This is the one irreversible mistake CHANGELOG.md
     # found the hard way: a run's real changes existed only in the VM's working
     # tree, the gate passed anyway (see the fix in adws/adw_modules/gates.py),
     # and destroying the VM erased them for good. Refuse rather than auto-stash —

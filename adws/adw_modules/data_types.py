@@ -430,7 +430,7 @@ class UsageBreakdown(BaseModel):
     # These are what make cost RECONCILABLE instead of recomputed. Every figure
     # below is derived from a local rate table, and on 2026-09-07 that table was
     # wrong for 7 of 11 models while a separate 26% of spend never reached the
-    # trace at all (see NEXTSTEPS 2026-09-07d/e). An id per turn lets a run be
+    # trace at all (see CHANGELOG.md 2026-09-07d/e). An id per turn lets a run be
     # checked against the provider's own per-generation record, which is the
     # only source that cannot drift.
     response_ids: list[str] = Field(default_factory=list)
