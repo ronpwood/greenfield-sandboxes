@@ -274,9 +274,9 @@ class ToolCallTracker:
 # and nothing anywhere in the stack bounded it. Killing the grandchild by hand
 # unblocked the call and the builder resumed within seconds.
 #
-# Nothing else catches this class. pi has no tool timeout (`pi --help` offers
-# only allow/deny lists), and the failure is indistinguishable from a slow
-# phase: at N=6 a wedged arm holds a VM and a live key open with no ceiling and
+# pi's bash tool takes a `timeout` but has no default, so nothing else caught
+# this class until bash_timeout.ts (below) gave every call one. Without a
+# bound, the failure is indistinguishable from a slow phase: at N=6 a wedged arm holds a VM and a live key open with no ceiling and
 # never reports a failure, because an absence is not an error.
 #
 # 900s is deliberately generous. The longest phase TOTALS observed are ~410s
@@ -285,6 +285,19 @@ class ToolCallTracker:
 # point is to convert "hangs forever, silently" into "fails in 15 minutes, with
 # a reason" -- not to police slow models.
 STALL_SECONDS = int(os.environ.get("PI_STALL_SECONDS", "900"))
+
+# The watchdog above kills the RUN, and the agent never learns why: harn4
+# (2026-09-24) hung on a probe whose setInterval kept bun alive, and after a
+# hand-kill it retried the same hang. So every bash call also gets a timeout at
+# the TOOL level (bash_timeout.ts), which kills the command's process tree and
+# hands the agent "Command timed out after N seconds" in the same turn. The
+# watchdog stays as the backstop, so the tool limit must sit under it: a bash
+# call that prints nothing produces no pi events, and 900 s of that is a kill.
+BASH_TIMEOUT_SECONDS = int(os.environ.get("PI_BASH_TIMEOUT_SECONDS", "300"))
+BASH_TIMEOUT_MAX_SECONDS = min(int(os.environ.get("PI_BASH_TIMEOUT_MAX_SECONDS", "600")),
+                               STALL_SECONDS - 60)
+BASH_TIMEOUT_EXTENSION = str(Path(__file__).resolve().parents[1]
+                             / "adw_data" / "harness_engineering" / "bash_timeout.ts")
 
 
 def _pump(stream, sink: "queue.Queue") -> None:
@@ -340,7 +353,7 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     ]
     if request.tools:
         cmd += ["--tools", ",".join(request.tools)]
-    for extension in request.extensions:
+    for extension in [BASH_TIMEOUT_EXTENSION, *request.extensions]:
         cmd += ["-e", extension]
     cmd.append(request.prompt)
 
@@ -358,10 +371,13 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     # start_new_session: pi and every process it spawns share one process
     # group, so a stall can be killed as a TREE. Without it a hung grandchild
     # (pi -> bash -> bun) survives and keeps the pipe open forever.
+    env = operator_env()
+    env["PI_BASH_TIMEOUT_SECONDS"] = str(min(BASH_TIMEOUT_SECONDS, BASH_TIMEOUT_MAX_SECONDS))
+    env["PI_BASH_TIMEOUT_MAX_SECONDS"] = str(BASH_TIMEOUT_MAX_SECONDS)
     process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, bufsize=1, cwd=request.cwd,
-                               env=operator_env(), start_new_session=True)
+                               env=env, start_new_session=True)
     if on_spawn:
         on_spawn(process.pid)
     events: "queue.Queue" = queue.Queue()

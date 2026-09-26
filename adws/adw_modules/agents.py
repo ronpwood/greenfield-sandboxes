@@ -10,6 +10,8 @@ disposes.
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +24,27 @@ from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
 from .utils import new_id
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
+
+# Resends after a provider error, into the SAME session. 4 of 6 mounts in the
+# N=3 set were ended by causes outside the model (CHANGELOG 2026-09-24f), three
+# of them provider errors: Gemini's intermittent "Corrupted thought signature"
+# 400 (about 1 turn in 5 unpinned on the host repro) and a false-positive
+# content filter. pi retries these itself only when they arrive as an HTTP
+# error; harn8 and harn9 got theirs bare, mid-stream, with willRetry false.
+# harn7's planner hit the same 400 five times, and pi's own resend cleared every
+# one of them, so the fault is per request, not per session.
+#
+# Resuming is safe: pi drops an assistant message whose stopReason is error or
+# aborted when it rebuilds the context (transformMessages), so the resend is
+# the same clean context pi's own retry would send, and the agent keeps its
+# work. Model-agnostic on purpose. Pinning one model's provider route was
+# rejected in 2026-09-24f.
+PROVIDER_RETRIES = int(os.environ.get("SSSF_PROVIDER_RETRIES", "2"))
+PROVIDER_RETRY_WAIT_SECONDS = (15, 45)     # before resend 1, 2 (the last repeats)
+PROVIDER_RETRY_PROMPT = (
+    "Your previous turn was cut off by an error at the model provider, not by anything "
+    "you did. Nothing from that turn was kept. Continue the task from where you were."
+)
 
 
 class GateFailure(RuntimeError):
@@ -111,7 +134,11 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                           # the ceiling the context curve is read against
                                           "context_window": agent_pi.context_window(
                                               *agent_pi.resolve_model(agent.model)),
-                                          "harness_engineering": agent.harness_engineering}))
+                                          "harness_engineering": agent.harness_engineering,
+                                          # loaded for every pi agent, whatever the roster says
+                                          "builtin_extensions": [agent_pi.BASH_TIMEOUT_EXTENSION],
+                                          "bash_timeout_seconds": [agent_pi.BASH_TIMEOUT_SECONDS,
+                                                                   agent_pi.BASH_TIMEOUT_MAX_SECONDS]}))
     run.console.agent_started(agent.name, agent.model, session_id)
 
     # Parse retries and gate corrections re-enter the SAME pi session, so the
@@ -120,7 +147,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     latest: agent_pi.PiResult | None = None
     spent = UsageBreakdown()
 
-    def send(prompt_text: str) -> agent_pi.PiResult:
+    def send_once(prompt_text: str) -> agent_pi.PiResult:
         nonlocal latest
         request = PiRequest(
             prompt=prompt_text,
@@ -145,6 +172,28 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
+        return result
+
+    def send(prompt_text: str) -> agent_pi.PiResult:
+        """One send, resent into the same session on a provider error (bounded).
+
+        A provider error that survives the retries is still final: it reaches
+        _parse_with_retries, which raises ProviderError exactly as before.
+        """
+        result = send_once(prompt_text)
+        for attempt in range(1, PROVIDER_RETRIES + 1):
+            if getattr(result, "stop_reason", None) != "error":
+                break
+            error = (result.error_message or "no errorMessage")[:400]
+            wait = PROVIDER_RETRY_WAIT_SECONDS[min(attempt, len(PROVIDER_RETRY_WAIT_SECONDS)) - 1]
+            run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                         type="log", name="provider_retry",
+                                         payload={"agent": agent.name, "model": agent.model,
+                                                  "attempt": attempt, "limit": PROVIDER_RETRIES,
+                                                  "wait_seconds": wait, "error": error}))
+            run.console.retry(agent.name, attempt, PROVIDER_RETRIES, f"provider error: {error}")
+            time.sleep(wait)
+            result = send_once(PROVIDER_RETRY_PROMPT)
         return result
 
     # What the tree looked like before this agent got its hands on it. Every
