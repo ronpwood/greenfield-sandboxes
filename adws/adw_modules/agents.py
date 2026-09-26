@@ -94,7 +94,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
     }
-    system_text = prompts.render(agent.prompt_engineering.system, variables)
+    system_text = system_text_for(agent, variables)
     user_text = prompts.render(agent.prompt_engineering.user, variables)
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
@@ -335,6 +335,17 @@ def _persist_envelope(run, phase: Phase, agent_name: str, call: AgentCall,
                   "output_type": call.output_type.__name__, "attempt": attempt,
                   **envelope.model_dump()}
         (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+
+
+def system_text_for(agent: AgentConfig, variables: dict[str, str]) -> str:
+    """The system prompt as sent: preamble files, the role prompt, appendix files.
+
+    With no preamble and no appendix this is exactly `prompts.render(system)` —
+    the control rosters depend on that, byte for byte.
+    """
+    pe = agent.prompt_engineering
+    parts = [*pe.preamble, pe.system, *pe.appendix]
+    return "\n\n---\n\n".join(prompts.render(path, variables) for path in parts)
 
 
 def with_notes(envelope: EnvelopeBase, notes: str) -> EnvelopeBase:

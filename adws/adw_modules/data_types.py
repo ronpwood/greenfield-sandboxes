@@ -90,9 +90,25 @@ class PlanOutput(EnvelopeBase):
     commit_message: str = ""
 
 
+class BuildCheck(BaseModel):
+    """One claim a builder makes about its work, and how it knows.
+
+    "I checked" is not evidence; a command and what it printed are. The
+    reviewer reads these; `gates.build_claims` only records how many there are.
+    """
+
+    claim: str                      # what is true of the build
+    command: str = ""               # the command or script that showed it (/tmp is fine)
+    result: str = ""                # what it printed or returned, abridged, never "passed"
+
+
 class BuildOutput(EnvelopeBase):
     changed_files: list[str] = Field(default_factory=list)
     commit_message: str = ""        # consumed by the git commit phase
+    # Team chain only; empty defaults keep every other roster's reports valid.
+    checks: list[BuildCheck] = Field(default_factory=list)
+    departures: list[str] = Field(default_factory=list)      # plan item, what was done instead, why
+    open_questions: list[str] = Field(default_factory=list)
 
 
 class TestCase(BaseModel):
@@ -105,6 +121,7 @@ class TestCase(BaseModel):
 
     name: str                       # the bun test name, verbatim
     requirement: str                # the plan requirement it proves, in the plan's words
+    spec_ids: list[str] = Field(default_factory=list)   # team spec R/V ids, e.g. ["R2", "V4"]
 
 
 class TestDesignOutput(EnvelopeBase):
@@ -132,12 +149,27 @@ class ReviewFinding(BaseModel):
     evidence: str = ""              # where it lives, or what is missing
 
 
+class ValueCheck(BaseModel):
+    """One row of a reviewer's value sweep: a spec V id, run against the delivered code.
+
+    `actual` is what the sweep observed, not what the code "should" return. A
+    sweep row is the opposite of an asserted check — see `gates.values_swept`.
+    """
+
+    id: str                         # a V id from the spec, or one an accepted amendment added
+    input: str = ""
+    expected: str = ""              # from the spec's table, never from the code
+    actual: str = ""                # as observed by running the sweep
+    met: bool = False
+
+
 class ReviewOutput(EnvelopeBase):
     """Confirmation that what was built is what was asked for — not a test run."""
 
     approved: bool = False
     findings: list[ReviewFinding] = Field(default_factory=list)
     blocking: list[str] = Field(default_factory=list)   # what must change before approval
+    value_checks: list[ValueCheck] = Field(default_factory=list)   # team chain only
 
 
 class DocumentOutput(EnvelopeBase):
@@ -319,6 +351,11 @@ class AgentCall(BaseModel):
 class PromptEngineering(BaseModel):
     system: str                     # path to system.md
     user: str                       # path to user.md
+    # Shared text around the role prompt: preamble + system + appendix, rendered
+    # with the same variables. Empty (the default) renders exactly `system`, so a
+    # roster without them sends the same bytes it always did.
+    preamble: list[str] = Field(default_factory=list)
+    appendix: list[str] = Field(default_factory=list)
 
 
 class AgentConfig(BaseModel):

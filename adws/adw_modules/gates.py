@@ -16,7 +16,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from . import quality
+from . import quality, team_spec
 from .data_types import EnvelopeBase, GateReport
 from .manifest import load as load_manifest
 from .quality import BUN, OXLINT_VERSION
@@ -294,3 +294,147 @@ def tests_pass(command: str):
         return GateReport().check(command, ok, note)
     gate.__name__ = f"tests_pass({command})"
     return gate
+
+
+# ── team chain: the living spec ─────────────────────────────────────────────
+#
+# The team chain's spec is <context_handoff_dir>/plan.md in the eight-section
+# form team_spec defines. These gates check its SHAPE and its INTEGRITY, never
+# whether its content is right — that is the reviewer's job, and ruling on
+# amendments is how the reviewer does it.
+
+def _spec_path(run) -> Path:
+    return Path(run.context_handoff_dir) / "plan.md"
+
+
+def _read_spec(run) -> tuple[Path, "team_spec.TeamSpec | None"]:
+    path = _spec_path(run)
+    return path, (team_spec.parse(path.read_text()) if path.is_file() else None)
+
+
+def spec_form(envelope: EnvelopeBase, run) -> GateReport:
+    """The planner wrote the spec in the team's form, with a real answer key.
+
+    A value row without a derivation is an expected value nobody can check
+    against first principles — so the derivation cell is part of the form.
+    """
+    report = GateReport()
+    path, spec = _read_spec(run)
+    report.check("plan.md", spec is not None, f"{path}" if spec else f"{path} does not exist")
+    if spec is None:
+        return report
+    for name in team_spec.SECTIONS:
+        report.check(f"## {name}", name in spec.sections,
+                     "present" if name in spec.sections
+                     else f"missing — the heading must read exactly '## {name}'")
+    report.check("requirements", bool(spec.requirement_ids),
+                 ", ".join(spec.requirement_ids) if spec.requirement_ids
+                 else "no requirement ids — list items must start with R1, R2, …")
+    report.check("expected values", bool(spec.value_ids),
+                 f"{len(spec.value_ids)} row(s): {', '.join(spec.value_ids)}" if spec.value_ids
+                 else "no V rows — every data table, mapping or rule in the request becomes "
+                      "input → expected rows, with a derivation, in a table whose first "
+                      "column is V1, V2, …")
+    underived = [r[0] for r in spec.value_rows if len(r) < 4 or not r[-1].strip()]
+    report.check("derivations", not underived,
+                 "every V row has a derivation" if not underived
+                 else f"no derivation in the last column of: {', '.join(underived)}")
+    report.check("no amendments yet", not spec.amendments,
+                 "none" if not spec.amendments
+                 else f"{len(spec.amendments)} amendment(s) at plan time — the planner writes "
+                      "the spec directly; amendments are for the agents after it")
+    return report
+
+
+def spec_frozen(committed_spec: str, plan_sha: str):
+    """Gate factory: the frozen sections of plan.md still equal the committed spec.
+
+    Byte-equal per section, not semantically equal: a semantic comparison
+    needs a judge. Everything outside the frozen sections is free to change,
+    so notes and amendments never trip this.
+    """
+    def spec_frozen(envelope: EnvelopeBase, run) -> GateReport:
+        report = GateReport()
+        shown = subprocess.run(["git", "show", f"{plan_sha}:{committed_spec}"],
+                               cwd=run.repo_root, capture_output=True, text=True)
+        path, spec = _read_spec(run)
+        if shown.returncode != 0 or spec is None:
+            return report.check("spec readable", False,
+                                f"git show {plan_sha[:7]}:{committed_spec} exit {shown.returncode}"
+                                if shown.returncode else f"{path} does not exist")
+        committed = team_spec.parse(shown.stdout)
+        for name in team_spec.FROZEN:
+            same = spec.sections.get(name) == committed.sections.get(name)
+            report.check(f"## {name}", same,
+                         f"unchanged since {plan_sha[:7]}" if same
+                         else f"edited in place in {path}. Frozen sections change only through "
+                              "an amendment in ## Amendments, not in place — put this section "
+                              "back exactly as committed and propose the change as an amendment")
+        return report
+    return spec_frozen
+
+
+def amendments_ruled(envelope: EnvelopeBase, run) -> GateReport:
+    """After a review, no amendment is left `proposed`, and every ruling says why."""
+    report = GateReport()
+    path, spec = _read_spec(run)
+    if spec is None:
+        return report.check("plan.md", False, f"{path} does not exist")
+    if not spec.amendments:
+        return report.check("amendments", True, "none proposed")
+    for a in spec.amendments:
+        ruled = a.status in ("accepted", "rejected")
+        report.check(a.id, ruled and bool(a.reason),
+                     f"{a.status}: {a.reason}" if ruled and a.reason
+                     else (f"{a.status} with no reason — write "
+                           f"'**Ruling:** {a.status} by reviewer (<phase>): <why>'" if ruled
+                           else f"ruling is {a.ruling or 'missing'!r} — accept or reject it, "
+                                "with a first-principles reason, in plan.md"))
+    return report
+
+
+def values_swept(envelope: EnvelopeBase, run) -> GateReport:
+    """Every effective V has a value check, an approval has none unmet, and a sweep exists.
+
+    Coverage and existence, not a re-run: this forces the enumeration to be
+    WRITTEN, which is what separated the harn5 catch from the harn7 miss. It
+    does not prove the sweep's output is what `value_checks` reports.
+    """
+    report = GateReport()
+    path, spec = _read_spec(run)
+    if spec is None:
+        return report.check("plan.md", False, f"{path} does not exist")
+    wanted = team_spec.effective_value_ids(spec)
+    checks = {c.id: c for c in getattr(envelope, "value_checks", [])}
+    missing = [v for v in wanted if v not in checks]
+    report.check("coverage", not missing,
+                 f"{len(wanted)} V id(s) checked" if not missing
+                 else f"no value_checks entry for: {', '.join(missing)}")
+    approved = bool(getattr(envelope, "approved", False))
+    unmet = [v for v in wanted if v in checks and not checks[v].met]
+    report.check("approved vs value checks", not (approved and unmet),
+                 "no unmet value while approved" if not (approved and unmet)
+                 else f"approved=true with unmet value(s): {', '.join(unmet)}")
+    handoff = Path(run.context_handoff_dir)
+    sweeps = [Path(a) for a in envelope.artifacts
+              if Path(a).parent == handoff and Path(a).name.startswith("value_sweep.")]
+    real = [s for s in sweeps if s.is_file() and s.stat().st_size > 0]
+    report.check("value_sweep artifact", bool(real),
+                 f"{real[0].name}, {_size(real[0])}" if real
+                 else f"declare {handoff}/value_sweep.<ext> in artifacts — the script you "
+                      "ran over every V, non-empty")
+    return report
+
+
+def build_claims(envelope: EnvelopeBase, run) -> GateReport:
+    """REPORT what the builder claims and how. Never fails — see durable_suite_growth.
+
+    A gate that fails on empty `checks` is satisfied by one placeholder line.
+    The reviewer reads the checks; this only puts their count in the trace.
+    """
+    checks = getattr(envelope, "checks", [])
+    with_command = sum(1 for c in checks if c.command.strip())
+    note = (f"{len(checks)} check(s), {with_command} with a command; "
+            f"{len(getattr(envelope, 'departures', []))} departure(s); "
+            f"{len(getattr(envelope, 'open_questions', []))} open question(s)")
+    return GateReport().check("build claims", True, note)

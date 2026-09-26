@@ -9,6 +9,9 @@ set working-directory := '..'
 # A `mod` also does NOT inherit parent variables or settings — `config`,
 # positional args, and dotenv all have to be declared again here.
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
+# The team chain needs the team roster: the default planner is never asked for
+# the spec form, so `spec_form` would fail it. SSSF_CONFIG still wins when set.
+team_config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.team.config.yaml")
 set positional-arguments
 set dotenv-load
 
@@ -71,6 +74,10 @@ sdlc *ARGS:
 # simple-sdlc plus a red-gated test-design phase: the suite must FAIL pre-build
 tdd *ARGS:
     uv run adws/adw_tdd_sdlc.py --config {{config}} "$@"
+
+# tdd chain run by a team: living spec, amendments, a value sweep in every review
+team *ARGS:
+    uv run adws/adw_team_sdlc.py --config {{team_config}} "$@"
 
 # sdlc plus a deterministic quality block at the end
 plan-build-test-quality *ARGS:
