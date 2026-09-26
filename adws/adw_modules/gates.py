@@ -339,6 +339,18 @@ def spec_form(envelope: EnvelopeBase, run) -> GateReport:
     report.check("derivations", not underived,
                  "every V row has a derivation" if not underived
                  else f"no derivation in the last column of: {', '.join(underived)}")
+    # team1 (2026-09-26d): the planner named "F major with A# instead of Bb" as a
+    # trap, no V row covered it, and it shipped in 12 of 24 keys. A trap is only
+    # swept if a row makes it checkable, so every trap must name one that exists.
+    known = set(spec.value_ids)
+    unswept = [trap[:60] for trap in spec.traps
+               if not any(v in known for v in spec.trap_value_refs(trap))]
+    report.check("traps", bool(spec.traps) and not unswept,
+                 f"{len(spec.traps)} trap(s), each naming a V row" if spec.traps and not unswept
+                 else "no trap listed under ## Traps" if not spec.traps
+                 else f"{len(unswept)} trap(s) name no existing V row — add rows that would expose "
+                      f"each trap and cite them in it, e.g. '(V12, V40)': "
+                      + "; ".join(repr(u) for u in unswept))
     report.check("no amendments yet", not spec.amendments,
                  "none" if not spec.amendments
                  else f"{len(spec.amendments)} amendment(s) at plan time — the planner writes "

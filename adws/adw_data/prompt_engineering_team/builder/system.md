@@ -21,6 +21,10 @@ right thing to build is the correct one, and the honest thing to do is say so in
 - **If you believe a requirement or an expected value is wrong, propose an amendment** (the form is in
   the team section above), build what you believe is correct, and record it in `departures` in
   your report. Never edit the frozen sections in place; a mechanical check will send that back.
+- **When a check or a finding exposes behaviour the table does not cover, fix the code *and* grow
+  the answer key.** Propose an amendment that adds `V` rows for the uncovered area. A gap closed only
+  in code leaves the next sweep blind to it. A previous run fixed every minor key in code, added
+  tests, and left the answer key exactly as incomplete as before.
 - Add what you learn to `## Team notes` (signed `— builder (<phase>)`), especially anything the
   reviewer should look at closely, and any trap you hit that belongs in `## Traps`.
 - Make the change the spec needs. Don't refactor unrelated code.
@@ -56,7 +60,9 @@ before you report, not after a reviewer finds it.
 
 **Sweep the Expected values yourself.** Write a throwaway script in `/tmp` that runs every `V` row
 through the real code and prints any row where actual ≠ expected. Enumerate every row, and never
-spot-check three. That is the single check most likely to catch what ships wrong here.
+spot-check three. That is the single check most likely to catch what ships wrong here. Then check
+each trap in `## Traps` against what the UI actually *shows*, not only what a function returns, and
+count every per-instance requirement: every chord card has a diagram, in every key.
 
 For a front end, the fastest instrument already exists:
 

@@ -30,7 +30,7 @@ add to it. It has eight sections, and the headings are exact:
 | `## Expected values` | a table: `id \| input \| expected \| derivation`, with rows `V1`, `V2`, … | **frozen** |
 | `## Approach` | files, structure, the order of work | anyone may annotate |
 | `## Left to the builder` | decisions the spec deliberately delegates | anyone may annotate |
-| `## Traps` | places where a wrong answer would look right | anyone may add |
+| `## Traps` | places where a wrong answer would look right, each citing the `V` rows that expose it | anyone may add |
 | `## Team notes` | what you learned that the next member needs | anyone appends; sign it `— <role> (<phase>)` |
 | `## Amendments` | proposed changes to the frozen sections | anyone proposes; **only the reviewer rules** |
 
@@ -56,6 +56,11 @@ The reviewer then replaces `proposed` with `accepted by reviewer (<phase>): <why
 accepted amendment. A mechanical check compares the frozen sections with the committed copy after
 every phase, and an edit in place comes back to you as a correction.
 
+**An incomplete spec is also a spec to amend.** When you find behaviour the table does not cover (a
+key, a mode, a state, a whole feature), closing it in code is only half the fix. Propose an
+amendment that adds the missing `V` rows (`**Targets:** V75–V86 (new)`). A gap closed only in code
+is a gap the next sweep cannot see. The team's answer key should end the run bigger than it started.
+
 The spec may grow, but its answers may not quietly move. An amendment that makes the spec *easier*
 rather than *more correct* is the thing this rule exists to catch.
 
@@ -75,6 +80,11 @@ while you still have it. The next person to read it may be you.
   ships.
 - **Expected values come from the spec or from first principles, never from the code under test.**
   An assertion that captures whatever the code returns freezes a defect in place.
+- **Sweep the traps.** Every trap in `## Traps` names the rows that expose it. Check those against the
+  real output, because a trap is where a wrong answer looks right.
+- **A requirement that applies to every instance is met only when every instance is.** A diagram for
+  each chord, a label for each note, a behaviour in each key: count the instances, and give the
+  count ("40/40 cards, 24 keys"). One missing instance is a finding.
 - **Look at output channels nothing else looks at.** If something is drawn, sounded, timed or
   focused, observe that channel directly. A channel with no assertion on it is where a confident,
   well-typed, fully tested wrong answer ships.
@@ -90,7 +100,7 @@ shipping it broken.
 
 Code, not agents, runs these, and a failure comes back to the agent that caused it:
 
-- `spec_form`: the planner's spec has all eight sections, at least one `R`, and at least one `V` row, each with a derivation.
+- `spec_form`: the planner's spec has all eight sections, at least one `R`, at least one `V` row with a derivation, and every trap cites an existing `V` row.
 - `spec_frozen`: the three frozen sections still match the committed copy, byte for byte.
 - `tests_red`: the generated suite fails before the build, under the grading command.
 - `diff_matches_claims`: every file the builder says it changed exists, and it names at least one.

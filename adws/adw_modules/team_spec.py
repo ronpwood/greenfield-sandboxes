@@ -56,6 +56,22 @@ class TeamSpec:
     value_ids: list[str] = field(default_factory=list)
     value_rows: list[list[str]] = field(default_factory=list)   # cells of each V row, id first
     amendments: list[Amendment] = field(default_factory=list)
+    traps: list[str] = field(default_factory=list)              # top-level list items in ## Traps
+
+    def trap_value_refs(self, trap: str) -> list[str]:
+        """The V ids a trap names, e.g. "(V12, V40)". A trap with none is prose nobody sweeps."""
+        return re.findall(r"\bV\d+\b", trap)
+
+
+def _list_items(body: str) -> list[str]:
+    """Top-level `- ` / `* ` items, each with its continuation lines folded in."""
+    items: list[str] = []
+    for line in body.splitlines():
+        if re.match(r"^[-*]\s+", line):
+            items.append(line.strip())
+        elif items and line.startswith((" ", "\t")) and line.strip():
+            items[-1] += " " + line.strip()
+    return items
 
 
 def _split_sections(text: str) -> dict[str, str]:
@@ -109,6 +125,7 @@ def parse(text: str) -> TeamSpec:
         value_ids=[r[0].strip("*") for r in rows],
         value_rows=rows,
         amendments=_amendments(sections.get("Amendments", "")),
+        traps=_list_items(sections.get("Traps", "")),
     )
 
 

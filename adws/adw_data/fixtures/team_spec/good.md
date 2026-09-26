@@ -31,7 +31,7 @@ How the three notes are laid out on screen.
 
 ## Traps
 
-- Spelling from a pitch-class table keyed by semitone loses the letter: 10 semitones is both A# and Bb.
+- Spelling from a pitch-class table keyed by semitone loses the letter: 10 semitones is both A# and Bb (V3).
 
 ## Team notes
 
