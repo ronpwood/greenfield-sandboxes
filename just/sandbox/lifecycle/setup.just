@@ -356,7 +356,7 @@ setup RUN_ID CONFIG="":
     REMOTE_CDE
       echo "[gate] C PASS  every roster model answered"
       echo "[gate] D PASS  non-zero cost and a loaded rate table"
-      echo "[gate] E PASS  credit reported above"
+      echo "[gate] E PASS  key credit reported above (account checked next)"
     else
       # Exit code tells which of the three failed; the per-line FAIL output above
       # already named the model or the reading.
@@ -366,6 +366,33 @@ setup RUN_ID CONFIG="":
         3) gate_fail "assertion D — no spend delta and/or no rate table in models.json" ;;
         *) gate_fail "assertions C/D/E — the remote gate script exited ${rc} (see output above)" ;;
       esac
+    fi
+
+    # E, host half — the ACCOUNT balance, which the runtime key cannot see. A
+    # key's own limit is a per-run cap; every key draws on one shared account.
+    # 2026-09-28: two arms mounted on ~$2.70 of account credit, both keys showed
+    # ~$9 of headroom, and the team arm died mid-review on a 402
+    # (in_flight_budget_exhausted). "Credit reported" was never an assertion.
+    # Required = every OPEN run (this one included) x the expected cost of one.
+    echo "[gate] E account credit covers every open run"
+    PER_RUN="${SBX_EXPECTED_RUN_COST:-3}"
+    OPEN=$("$RR" list | python3 -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin) if not r.get("closed_at")))')
+    [ -n "${OPENROUTER_PROVISIONING_KEY:-}" ] || gate_fail "assertion E — OPENROUTER_PROVISIONING_KEY not in scope; cannot read the account balance"
+    CREDITS=$(curl -sS --max-time 60 https://openrouter.ai/api/v1/credits -H "Authorization: Bearer ${OPENROUTER_PROVISIONING_KEY}") \
+      || gate_fail "assertion E — could not read /api/v1/credits"
+    if ACCT=$(printf '%s' "$CREDITS" | python3 -c '
+    import json, sys
+    d = json.load(sys.stdin)["data"]
+    remaining = d["total_credits"] - d["total_usage"]
+    need = int(sys.argv[1]) * float(sys.argv[2])
+    print(f"   account remaining ${remaining:.2f}, need ${need:.2f} ({sys.argv[1]} open run(s) x ${float(sys.argv[2]):.2f})")
+    sys.exit(0 if remaining >= need else 1)
+    ' "$OPEN" "$PER_RUN"); then
+      echo "$ACCT"
+      echo "[gate] E PASS  account credit covers every open run"
+    else
+      echo "$ACCT"
+      gate_fail "assertion E — account credit does not cover ${OPEN} open run(s); top up, tear down idle runs, or set SBX_EXPECTED_RUN_COST"
     fi
 
     # F — toolchain report. Every tool in sandbox_mount/guest/toolchain.lock,
