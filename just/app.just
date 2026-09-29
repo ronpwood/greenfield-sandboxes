@@ -42,9 +42,9 @@ archive:
         echo "apps/ is already empty — nothing to archive"
     fi
 
-# list what's in archive/
+# list retired apps in archive/ (archive/factory/ holds factory history, not apps)
 list:
-    @ls -1 archive 2>/dev/null | grep -v README.md || echo "archive/ is empty"
+    @ls -1 archive 2>/dev/null | grep -Ev '^(README\.md|factory)$' || echo "archive/ is empty"
 
 # archive the current app(s) and copy a new one in as apps/<name>:
 #   just app swap ../path/to/new-app blog2

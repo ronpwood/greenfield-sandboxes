@@ -63,7 +63,11 @@ sys.path.insert(0, str(REPO_ROOT / "adws" / "adw_modules"))
 import manifest  # noqa: E402 — the one reader of app.manifest.yaml and targets/*.yaml
 
 PROVENANCE_DIR = REPO_ROOT / ".sandbox" / "targets"
-ARCHIVE_SUFFIX = re.compile(r"-\d{8}-\d{6}$")  # just app archive's timestamp
+# just app archive's timestamp. This suffix DEFINES a retired payload app: only
+# archive/<name>-YYYYMMDD-HHMMSS entries become leak patterns. Anything else under
+# archive/ (e.g. archive/factory/, retired rosters) is inert factory history —
+# its dir name would otherwise forbid words every synced file contains.
+ARCHIVE_SUFFIX = re.compile(r"-\d{8}-\d{6}$")
 
 
 class SyncError(Exception):
@@ -248,7 +252,8 @@ def forbidden_patterns(cfg: dict, host_app: str) -> list[str]:
     names = {host_app}
     archive = REPO_ROOT / "archive"
     if archive.is_dir():
-        names |= {ARCHIVE_SUFFIX.sub("", d.name) for d in archive.iterdir() if d.is_dir()}
+        names |= {ARCHIVE_SUFFIX.sub("", d.name) for d in archive.iterdir()
+                  if d.is_dir() and ARCHIVE_SUFFIX.search(d.name)}
     names |= set(cfg["leak_patterns"])
     return sorted({n.lower() for n in names if n.strip()})
 

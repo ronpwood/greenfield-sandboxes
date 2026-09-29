@@ -71,11 +71,16 @@ document *ARGS:
 sdlc *ARGS:
     uv run adws/adw_plan_build_test.py --config {{config}} "$@"
 
-# simple-sdlc plus a red-gated test-design phase: the suite must FAIL pre-build
+# FROZEN CONTROL ARM (with sssf.config.yaml): do not edit this chain, its prompts
+# or its roster — every team-arm finding is measured against it on the same brief.
+# See specs/team-default-consolidation.md.
+# FROZEN CONTROL: simple-sdlc plus a red-gated test-design phase (the suite must FAIL pre-build)
 tdd *ARGS:
     uv run adws/adw_tdd_sdlc.py --config {{config}} "$@"
 
-# tdd chain run by a team: living spec, amendments, a value sweep in every review
+alias control := tdd
+
+# THE DEFAULT (sbx lifecycle execute's ADW): the tdd chain run by a team — living spec, amendments, a value sweep in every review
 team *ARGS:
     uv run adws/adw_team_sdlc.py --config {{team_config}} "$@"
 

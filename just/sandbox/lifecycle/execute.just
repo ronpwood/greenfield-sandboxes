@@ -6,7 +6,7 @@
 #
 # Three ways to drive a mounted sandbox:
 #   just sbx run cmd            — generic escape hatch, synchronous, prints output
-#   just sbx lifecycle execute  — the default: full SDLC, DETACHED, returns a PID
+#   just sbx lifecycle execute  — the default: the team chain, DETACHED, returns a PID
 #   just sbx run agent          — hand off to Claude Code and keep talking to it
 #
 # Nothing here ever destroys a VM. A failure reports and exits non-zero with the
@@ -18,23 +18,28 @@
 # ask ssh to forward host env (no SendEnv), so nothing from .env leaks over.
 
 # usage: just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer"
-#        just sbx lifecycle execute <run-id> prompts/06-redesign-quiet-room.md adws/adw_sssf_config/sssf.frontier.config.yaml
+#        just sbx lifecycle execute <run-id> prompts/greenfield.md "" control     # the frozen tdd control arm
+#        just sbx lifecycle execute <run-id> prompts/06-redesign-quiet-room.md adws/adw_sssf_config/sssf.frontier.config.yaml sdlc
 #
-# PROMPT is passed through verbatim: adw_plan_build_test resolves it with
+# PROMPT is passed through verbatim: every ADW resolves it with
 # utils.resolve_prompt(), so a path to a file IN THE SANDBOX'S CHECKOUT reads as
 # that file's contents and anything else stays inline text. For fan-out, a path
 # is the better handle — every arm then provably runs the same bytes.
 #
 # CONFIG is optional and picks the roster. It is appended as a trailing
-# `--config` to `adw sdlc`, whose recipe already passes "$@" through to
+# `--config` to the `adw <ADW>` recipe, which already passes "$@" through to
 # argparse; argparse keeps the LAST --config, so this wins over the module
 # default without the module needing to know about us. SSSF_CONFIG (the env
 # route) cannot work here at all: `ssh vm "cmd"` reads no profile and carries no
 # environment.
 
-# ADW picks WHICH workflow runs — any recipe name from `just adw` (sdlc,
-# simple-sdlc, plan-build-test-quality, scout, …). It defaults to `sdlc`, so
-# every existing call site is unchanged. It is a separate argument rather than
+# ADW picks WHICH workflow runs — any recipe name from `just adw` (team,
+# control/tdd, sdlc, simple-sdlc, scout, …). It defaults to `team` (since
+# 2026-09-28, specs/team-default-consolidation.md; it was `sdlc` before). With
+# CONFIG empty, team runs on sssf.team.config.yaml. Do NOT pair `team` with a
+# non-team roster: the default planner never writes the spec form, so the
+# `spec_form` gate fails it. `control` (alias of `tdd`) is the FROZEN control arm
+# on the default roster. It is a separate argument rather than
 # something smuggled into PROMPT because the recipe name is the FIRST token
 # after `adw` and the prompt is quoted as one word; concatenating them would put
 # the prompt where just expects a recipe.
@@ -44,8 +49,8 @@
 # their pi context instead of starting cold. Interpolated as typed, like
 # `run cmd`: these are flags, not prose, and re-quoting them would break pairs.
 
-# the default: full SDLC inside the sandbox, detached — returns a PID. CONFIG picks the roster, ADW the workflow
-execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
+# the default: the team chain inside the sandbox, detached — returns a PID. CONFIG picks the roster, ADW the workflow
+execute RUN_ID PROMPT CONFIG="" ADW="team" *EXTRA:
     #!/usr/bin/env bash
     set -euo pipefail
     RR="{{justfile_directory()}}/sandbox_mount/host/run_record.py"
@@ -88,7 +93,7 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     #
     # --shell bash --shell-arg -c is mandatory too: the repo's justfile sets
     # shell := ["zsh", "-ic"] and zsh is not in the exeuntu image (installing it
-    # is ~35s of apt for no benefit). `adw sdlc` is the module recipe.
+    # is ~35s of apt for no benefit). `adw <ADW>` is the module recipe.
     #
     # NOTE: run.log is truncated on every execute — one detached SDLC per
     # sandbox at a time is the intended shape. Pull the old log first if you

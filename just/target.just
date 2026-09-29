@@ -9,7 +9,8 @@
 #
 #     just target sync greenfield --push          regenerate its factory from HEAD, push, pin
 #     just sbx mount <id> --target greenfield     VM clones it at the pinned sync
-#     just sbx lifecycle execute <id> prompts/greenfield.md "" tdd
+#     just sbx lifecycle execute <id> prompts/greenfield.md             the team arm (default)
+#     just sbx lifecycle execute <id> prompts/greenfield.md "" control  the frozen tdd control
 #     just sbx manage harvest <id>                commits land in the target's checkout
 #
 # A module inherits NOTHING from its parent — cwd defaults to this file's
