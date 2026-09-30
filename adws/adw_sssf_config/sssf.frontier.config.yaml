@@ -12,7 +12,7 @@
 # tokens for judgement, which is the point of running it at all.
 defaults:
   coding_agent: pi
-  model: openrouter/anthropic/claude-opus-5   # provider/id — provider half is the pi provider name
+  model: openrouter/anthropic/claude-opus-5.5   # provider/id — provider half is the pi provider name
   thinking: high                   # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []
   # Roster-wide allowlist; any agent may override with its own list.
@@ -40,7 +40,7 @@ observability:
 
 agents:
   - name: planner
-    model: openrouter/anthropic/claude-opus-5   # 1M context; the plan is the highest-leverage artifact
+    model: openrouter/anthropic/claude-opus-5.5   # 1M context; the plan is the highest-leverage artifact
     thinking: high
     color: "#a78bfa"
     purpose: Turn a request into a plan the builder can implement without asking questions.
@@ -79,7 +79,7 @@ agents:
       - write
 
   - name: scout
-    model: openrouter/openai/gpt-5.6-sol
+    model: openrouter/openai/gpt-6-sol
     thinking: high
     color: "#fbbf24"
     purpose: Find and report where things live; change nothing.
@@ -104,7 +104,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openrouter/anthropic/claude-opus-5   # judgement against a spec — the same strength that earns it the plan
+    model: openrouter/anthropic/claude-opus-5.5   # judgement against a spec — the same strength that earns it the plan
     thinking: high
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.

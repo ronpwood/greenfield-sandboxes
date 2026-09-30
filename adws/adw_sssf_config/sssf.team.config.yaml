@@ -195,7 +195,7 @@ agents:
       - edit                       # team: rule on amendments in plan.md; `writes: []` still means it cannot fix code
 
   - name: documenter
-    model: openrouter/openai/gpt-5.6-luna
+    model: openrouter/openai/gpt-6-luna
     color: "#e879f9"
     purpose: Tell the next engineer what the team built and why, from the diff and the annotated spec; document only.
     prompt_engineering:

@@ -1,3 +1,31 @@
+# sssf.team-rev.config.yaml — the REVIEWER-ONLY model-mix team roster:
+# sssf.team.config.yaml with exactly one seat moved to a frontier model — the reviewer.
+#
+# mix1 (sssf.team-mix.config.yaml) moved the planner and the reviewer together, and
+# the value it found came from the reviewer (the Auckland cross-frame bug, found
+# outside the key). This roster isolates that seat: the planner writes the key on
+# the roster-default flash-tier planner, the builder builds on flash, and only the
+# judge is frontier. Thinking levels, prompts, tools, writes and harness are held
+# identical to the team roster, so an A/B against it is this one model line.
+# Pre-registration: CHANGELOG 2026-09-30b.
+#
+# sssf.team.config.yaml — the TEAM roster: the default roster's models, thinking
+# levels, writes and harness, with the team prompt set. Pairs with
+# adws/adw_team_sdlc.py (`just adw team`); the design is
+# specs/team-ownership-prompts.md.
+#
+# What differs from sssf.config.yaml, and nothing else does:
+#   - prompt_engineering points at prompt_engineering_team/<role>/, and every
+#     agent gets the shared charter (team.md) before its role prompt and the
+#     shared tool contracts (tool_contracts.md) after it.
+#   - purpose lines describe each role's part in the team's goal.
+#   - test_designer and reviewer get `edit`, so they can annotate the living
+#     spec (plan.md) without rewriting it whole. Their `writes` are unchanged,
+#     and permissions.py still enforces them: plan.md lives in context_handoff/,
+#     which is runtime, not the repo.
+# Held identical on purpose, so an A/B against the default roster is prompts +
+# chain with the models held constant (checked by the phase 4 validation).
+#
 # sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
@@ -53,10 +81,14 @@ agents:
     model: openrouter/google/gemini-3.8-flash
     thinking: high
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
-    purpose: Turn a request into a plan the builder can implement without asking questions.
+    purpose: Decide what right looks like and write the team's spec, with expected values derived from first principles.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/planner/system.md
-      user: adws/adw_data/prompt_engineering/planner/user.md
+      system: adws/adw_data/prompt_engineering_team/planner/system.md
+      user: adws/adw_data/prompt_engineering_team/planner/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     harness_engineering:
       - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
     writes:                        # the plan is the only thing it may leave in the repo
@@ -78,29 +110,38 @@ agents:
                                    # needs a frontier model is a question the five-roster
                                    # fan-out answers empirically, not config
     color: "#34d399"
-    purpose: Turn the plan's requirements into an executable test file that fails until the build satisfies it; touch nothing else.
+    purpose: Make the team's spec executable before the build exists, so every expected value becomes a red assertion.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/test_designer/system.md
-      user: adws/adw_data/prompt_engineering/test_designer/user.md
+      system: adws/adw_data/prompt_engineering_team/test_designer/system.md
+      user: adws/adw_data/prompt_engineering_team/test_designer/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     writes:                        # exactly one lane. NOT "tests/generated/" with a bare
                                    # trailing slash: permissions._matches checks the "/"
                                    # prefix branch BEFORE the glob branch, so a pattern with
                                    # both "*" and a trailing "/" would literal-match nothing.
       - apps/*/tests/generated/**
-    tools:                         # reads the plan and the code; writes only its suite —
-      - read                       # no edit, so it cannot "help" the fixed suite
+    tools:                         # reads the plan and the code; writes only its suite in the repo
+      - read
       - grep
       - find
       - ls
       - bash
       - write
+      - edit                       # team: annotate plan.md; `writes` above still keeps it off the fixed suite
 
   - name: builder
     color: "#22d3ee"
-    purpose: Implement the plan exactly; report every changed file in the envelope.
+    purpose: Make the spec true for the person who asked; challenge it through amendments where first principles disagree.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/builder/system.md
-      user: adws/adw_data/prompt_engineering/builder/user.md
+      system: adws/adw_data/prompt_engineering_team/builder/system.md
+      user: adws/adw_data/prompt_engineering_team/builder/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     # No `writes` key: unrestricted, and the only agent that is. It still cannot
     # touch defaults.protected_files — the builder does not get to edit its own grader.
     tools:                         # the only agent that mutates the repo — everything on
@@ -114,10 +155,14 @@ agents:
 
   - name: scout
     color: "#fbbf24"
-    purpose: Find and report where things live; change nothing.
+    purpose: Find the ground truth the team stands on; change nothing.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/scout/system.md
-      user: adws/adw_data/prompt_engineering/scout/user.md
+      system: adws/adw_data/prompt_engineering_team/scout/system.md
+      user: adws/adw_data/prompt_engineering_team/scout/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     harness_engineering:
       - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
     writes: []                     # read-only, and now actually read-only: its findings
@@ -138,30 +183,39 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openrouter/z-ai/glm-5.3
+    model: openrouter/anthropic/claude-opus-5.5   # mix: frontier reviewer
     thinking: high
     color: "#fb7185"
-    purpose: Confirm that what was built is what was asked for; change nothing.
+    purpose: Decide whether the person who asked got what they needed; sweep every expected value, rule on every amendment.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/reviewer/system.md
-      user: adws/adw_data/prompt_engineering/reviewer/user.md
+      system: adws/adw_data/prompt_engineering_team/reviewer/system.md
+      user: adws/adw_data/prompt_engineering_team/reviewer/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     writes: []                     # a reviewer that cannot fix cannot quietly fix — the
                                    # claim the tool list only implied, now enforced
-    tools:                         # full read surface; write only for review.md, no edit — a reviewer that cannot fix cannot quietly fix
+    tools:                         # full read surface; write for review.md and value_sweep.*
       - read
       - grep
       - find
       - ls
       - bash
       - write
+      - edit                       # team: rule on amendments in plan.md; `writes: []` still means it cannot fix code
 
   - name: documenter
     model: openrouter/openai/gpt-6-luna
     color: "#e879f9"
-    purpose: Write up the change that was just made, from the diff; document only.
+    purpose: Tell the next engineer what the team built and why, from the diff and the annotated spec; document only.
     prompt_engineering:
-      system: adws/adw_data/prompt_engineering/documenter/system.md
-      user: adws/adw_data/prompt_engineering/documenter/user.md
+      system: adws/adw_data/prompt_engineering_team/documenter/system.md
+      user: adws/adw_data/prompt_engineering_team/documenter/user.md
+      preamble:                    # the team charter: goal, living spec, amendments, what counts as a check
+        - adws/adw_data/prompt_engineering_team/team.md
+      appendix:                    # tool and shell mechanics, shared instead of copied into six prompts
+        - adws/adw_data/prompt_engineering_team/tool_contracts.md
     writes:                        # documentation only — "document only" is a rule now,
       - app_docs/                  # not a line in a prompt the model may drift from.
       - docs/                      # Markdown anywhere, because docs live next to the
