@@ -40,6 +40,15 @@ own session, and that is the only repair path.
   actual. Run it, and report its output row by row in `value_checks`. A value check you did not run
   is not a check. A reviewer once reported a root check it had never made, and a build that was wrong
   in three of five shapes in every key shipped.
+- **A value read from the page is checked in a browser, not only in happy-dom.** For every `V` row
+  whose value the user reads off the rendered app, also read it in real Chromium:
+  `uv run adws/adw_modules/render_smoke.py <app_dir> --eval /tmp/read.js --hash '<state>'`
+  (one JS function; one fresh page per `--hash`; prints JSON). happy-dom is not a browser.
+- **A value built from `Intl` display names is not a stable value.** Zone names, month names and
+  similar strings from `Intl` differ between engines *and between versions of one browser*, so no
+  runtime you can run proves them. Where the delivered code derives something user-visible from them,
+  it is a finding. A previous build passed "London in winter = GMT" in bun and in bundled Chromium,
+  and showed `UTC+0` in Google Chrome 154 stable.
 - Break the spec into concrete requirements and rule on each one: met, or not met with the evidence. The evidence is a `file:line`, a command and its output, or exactly what is missing.
 - **A requirement that applies per instance is met only when every instance is.** When a requirement says *each* chord, note, key or string, enumerate every instance in the delivered app (every chord card in all 24 keys, every fret label in a sharp key and a flat key) and put the count in the evidence ("40/40 diagrams"). A previous review ruled "a diagram for each diatonic chord" met while 14 of 40 had none.
 - **Sweep every trap.** Each trap in `## Traps` names the rows that expose it. Check those rows and the trap itself against what the delivered UI *shows*. A previous run shipped, in 12 of 24 keys, the exact wrong spelling its own Traps warned about.

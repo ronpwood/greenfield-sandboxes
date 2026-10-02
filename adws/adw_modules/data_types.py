@@ -271,6 +271,22 @@ class ChangeSet(BaseModel):
         return not (self.files or self.untracked)
 
 
+class SuiteChanges(BaseModel):
+    """Edits to the graded test suites since the red commit — git facts only.
+
+    `removed` is the number that matters: growth is all `+` lines, a weakening
+    is a `-` line (a deleted expect, or the old side of a changed value).
+    """
+
+    since: str                      # short sha of the red commit
+    files: list[str] = Field(default_factory=list)
+    untracked: list[str] = Field(default_factory=list)
+    added: int = 0
+    removed: int = 0
+    removed_lines: list[str] = Field(default_factory=list)   # "<file> <@@ hunk @@> | <line>"
+    diff_path: str = ""
+
+
 class ChangesOutput(EnvelopeBase):
     """A ChangeSet shaped as an envelope so an agent can be handed it directly.
 
@@ -388,7 +404,9 @@ class ConfigDefaults(BaseModel):
     tools: Optional[list[str]] = None    # roster-wide allowlist; None = all tools usable
     # Off-limits to every agent that has not named them in its own `writes`.
     # The factory's own code is the default: an agent must not be able to edit
-    # the machinery that decides whether its work passed.
+    # the machinery that decides whether its work passed. permissions.py adds one
+    # derived list on top, for every roster: data_dir outside sessions/, which
+    # no agent may write and no `writes` entry unlocks.
     protected_files: list[str] = Field(default_factory=lambda: [
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])

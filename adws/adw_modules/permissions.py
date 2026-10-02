@@ -27,6 +27,19 @@ happened. It aborts the phase and names every offending path.
 Two keys drive it, both in sssf.config.yaml:
     defaults.protected_files   paths no agent may touch unless it names them itself
     agents[].writes      None = unrestricted · [] = read-only · [...] = only these
+
+One more list is derived in code, so every roster gets it whatever its YAML
+says — an agent must not be able to change the prompts and harness it is judged
+by:
+    never_writable       data_dir outside sessions/ (prompt sets, harness
+                         extensions, fixtures). Checked above `writes`: no glob
+                         unlocks it, because a documenter's "**/*.md" would
+                         otherwise reach every prompt.
+
+The test suites are deliberately NOT here. The builder grows the fixed suite
+by design, and corrects red-suite values under an accepted amendment (mtg1's
+V67, 930 -> 1320 via A2). A path rule cannot tell that from weakening a test;
+only a reader of the diff can.
 """
 
 from __future__ import annotations
@@ -135,14 +148,27 @@ def always_writable(cfg: SSSFConfig) -> list[str]:
     is normally ignored, so it never even appears in a snapshot — but an agent's
     ability to record its work must not hang on a gitignore entry that someone
     can delete or that a changed `data_dir` can outgrow.
+
+    `sessions/` only, never all of `data_dir`: the rest of it is TRACKED — the
+    prompt sets and harness extensions every agent is judged by. Granting the
+    whole directory let a reviewer rewrite its own prompt (adversarial review,
+    2026-10-02). Nothing else under `data_dir` is written during a phase:
+    `sessions/` and `sssf.db*` are the only runtime state, both gitignored.
     """
+    return [cfg.defaults.data_dir.rstrip("/") + "/sessions/"]
+
+
+def never_writable(cfg: SSSFConfig) -> list[str]:
+    """Everything else under `data_dir` — the grader's inputs. No `writes` unlocks it."""
     return [cfg.defaults.data_dir.rstrip("/") + "/"]
 
 
 def permitted(path: str, agent: AgentConfig, cfg: SSSFConfig) -> bool:
-    """Session runtime first, then the agent's own list, then what is protected."""
+    """Own runtime, then the grader's inputs, then the agent's list, then what is protected."""
     if any(_matches(path, p) for p in always_writable(cfg)):
         return True
+    if any(_matches(path, p) for p in never_writable(cfg)):
+        return False                     # prompts, harness: no exceptions
     if any(_matches(path, p) for p in (agent.writes or [])):
         return True                      # naming a path is what unlocks a protected one
     if any(_matches(path, p) for p in cfg.defaults.protected_files):

@@ -48,6 +48,7 @@ import argparse
 import sys
 
 from adw_modules import agents, changes, gates, git_helper, quality, session, utils
+from adw_modules.manifest import load as load_manifest
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
                                     DocumentOutput, PhaseParams, PlanOutput,
                                     ReviewOutput, TestDesignOutput)
@@ -134,7 +135,13 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         # The count the builder's growth is measured against, once, on the
         # committed red tree: nothing the builder does can move it.
         durable_baseline = gates.durable_suite_count(run.repo_root)
-        ph.log(durable_tests=durable_baseline)
+        # Every review is shown the suites' diff against this commit: the builder
+        # may edit them (growth, amendment corrections), so a weakening must be
+        # READ rather than path-locked (CHANGELOG 2026-10-02).
+        red_sha = git_helper.rev("HEAD")
+        ph.log(durable_tests=durable_baseline, red_sha=git_helper.short_sha(red_sha))
+    app = load_manifest().app
+    suite_paths = [app.test_file, app.generated_tests_dir]
     growth = gates.durable_suite_growth(durable_baseline)
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
@@ -172,8 +179,15 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         final = i == MAX_REVIEWS
         with run.phase(PhaseParams(name=f"review_{i}", kind="agent", owner="reviewer",
                                    description="Confirm the build matches the plan")) as ph:
+            suites = changes.capture_suites(run, red_sha, suite_paths)
+            suite_note = changes.suite_notes(suites, amendments=False)
+            ph.log(suite_added=suites.added, suite_removed=suites.removed,
+                   suite_diff=suites.diff_path)
             review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt,
-                                       previous=agents.with_notes(build, FINAL_REVIEW_NOTES) if final else build,
+                                       previous=agents.with_notes(build, "\n\n".join(filter(None, [
+                                           build.notes_for_next_agent,       # the builder's own handoff
+                                           FINAL_REVIEW_NOTES if final else "",
+                                           suite_note]))),
                                        gates=[gates.artifacts_exist, gates.verdict_consistent]))
 
         if review.approved or final:

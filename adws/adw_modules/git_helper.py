@@ -89,14 +89,14 @@ def is_dirty() -> bool:
     return bool(_git("status", "--porcelain"))
 
 
-def untracked_files() -> list[str]:
-    out = _git("ls-files", "--others", "--exclude-standard")
+def untracked_files(paths: list[str] | None = None) -> list[str]:
+    out = _git("ls-files", "--others", "--exclude-standard", *(["--", *paths] if paths else []))
     return [line for line in out.splitlines() if line]
 
 
-def diff_files(base: str) -> list[str]:
+def diff_files(base: str, paths: list[str] | None = None) -> list[str]:
     """Tracked files that differ between `base` and the working tree."""
-    out = _git("diff", "--name-only", base)
+    out = _git("diff", "--name-only", base, *(["--", *paths] if paths else []))
     return [line for line in out.splitlines() if line]
 
 
@@ -104,10 +104,10 @@ def diff_stat(base: str) -> str:
     return _git("diff", "--stat", base)
 
 
-def diff_counts(base: str) -> tuple[int, int]:
+def diff_counts(base: str, paths: list[str] | None = None) -> tuple[int, int]:
     """(insertions, deletions) across the diff. Binary files count as neither."""
     insertions = deletions = 0
-    for line in _git("diff", "--numstat", base).splitlines():
+    for line in _git("diff", "--numstat", base, *(["--", *paths] if paths else [])).splitlines():
         added, removed, *_ = line.split("\t")
         if added.isdigit():
             insertions += int(added)
@@ -116,5 +116,5 @@ def diff_counts(base: str) -> tuple[int, int]:
     return insertions, deletions
 
 
-def diff_text(base: str) -> str:
-    return _git("diff", base)
+def diff_text(base: str, paths: list[str] | None = None) -> str:
+    return _git("diff", base, *(["--", *paths] if paths else []))

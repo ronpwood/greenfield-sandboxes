@@ -312,6 +312,14 @@ def _read_spec(run) -> tuple[Path, "team_spec.TeamSpec | None"]:
     return path, (team_spec.parse(path.read_text()) if path.is_file() else None)
 
 
+# A missing `## Amendments` heading parses as "no amendments", which two gates
+# used to read as a pass (rmix1 review_1, CHANGELOG 2026-09-30b: A1-A3 filed under
+# Team notes, amendments_ruled said "none proposed", values_swept counted 53 of 57).
+_NO_AMENDMENTS_HEADING = ("`## Amendments` is missing from plan.md — restore the heading exactly "
+                          "and move every `### A<n>` block under it; amendments filed under any "
+                          "other heading are invisible to amendments_ruled and values_swept")
+
+
 def spec_form(envelope: EnvelopeBase, run) -> GateReport:
     """The planner wrote the spec in the team's form, with a real answer key.
 
@@ -382,6 +390,15 @@ def spec_frozen(committed_spec: str, plan_sha: str):
                          else f"edited in place in {path}. Frozen sections change only through "
                               "an amendment in ## Amendments, not in place — put this section "
                               "back exactly as committed and propose the change as an amendment")
+        # Every heading the committed spec had must still exist. This gate runs after
+        # every agent phase, so a dropped heading is caught by the phase that dropped it.
+        dropped = [n for n in team_spec.SECTIONS if n in committed.sections and n not in spec.sections]
+        report.check("section headings", not dropped,
+                     f"all {sum(n in committed.sections for n in team_spec.SECTIONS)} present"
+                     if not dropped
+                     else (_NO_AMENDMENTS_HEADING if dropped == ["Amendments"]
+                           else f"dropped from {path}: " + ", ".join(f"## {n}" for n in dropped)
+                                + " — restore each heading exactly as committed"))
         return report
     return spec_frozen
 
@@ -392,6 +409,8 @@ def amendments_ruled(envelope: EnvelopeBase, run) -> GateReport:
     path, spec = _read_spec(run)
     if spec is None:
         return report.check("plan.md", False, f"{path} does not exist")
+    if "Amendments" not in spec.sections:
+        return report.check("## Amendments", False, _NO_AMENDMENTS_HEADING)
     if not spec.amendments:
         return report.check("amendments", True, "none proposed")
     for a in spec.amendments:
@@ -416,6 +435,8 @@ def values_swept(envelope: EnvelopeBase, run) -> GateReport:
     path, spec = _read_spec(run)
     if spec is None:
         return report.check("plan.md", False, f"{path} does not exist")
+    if "Amendments" not in spec.sections:
+        return report.check("## Amendments", False, _NO_AMENDMENTS_HEADING)
     wanted = team_spec.effective_value_ids(spec)
     checks = {c.id: c for c in getattr(envelope, "value_checks", [])}
     missing = [v for v in wanted if v not in checks]

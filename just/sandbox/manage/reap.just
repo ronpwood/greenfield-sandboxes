@@ -42,7 +42,11 @@ reap *FLAGS:
     # this needs an `offset` loop.
     curl -sS --max-time 30 "$API/keys" -H "Authorization: Bearer $OPENROUTER_PROVISIONING_KEY" > "$TMPD/keys.json" \
         || { echo "!! could not list keys"; exit 1; }
-    ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null > "$TMPD/vms.json" 2>/dev/null || echo '{"vms":[]}' > "$TMPD/vms.json"
+    # NO fallback. An empty VM list here classes every open run as orphaned, and
+    # --yes would revoke live runs' keys. Unknown is not gone — dry run included,
+    # since a listing that shows every run as orphaned misleads just as badly.
+    ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null > "$TMPD/vms.json" 2>/dev/null \
+        || { echo "!! could not list VMs — refusing. Unknown is not gone, and reap would revoke live runs."; exit 1; }
 
     # Selection in python (stdlib, same reason run_record.py is): three-way join of
     # key list x vm list x run records is not a thing to write in jq.

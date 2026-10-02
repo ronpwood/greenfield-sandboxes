@@ -84,6 +84,7 @@ bar applies here. Two deliberate concessions:
 
 Usage:
     ./render_smoke.py <app_dir> [--json] [--max-clicks N] [--screenshot /tmp/app.png [--click LABEL ...]]
+    ./render_smoke.py <app_dir> --eval /tmp/read.js [--hash H ...]   # read values in the real browser
                                                                # or: uv run render_smoke.py ...
 
 --screenshot saves a full-page PNG of the app as it first renders (before any
@@ -97,6 +98,16 @@ The initial state of a multi-mode app hides most of it (harn2's builder said
 so, unprompted). The clicks happen on a separate page, so every check below
 still starts from a clean load. A label that matches nothing is reported and
 the picture is taken anyway -- read the report line before trusting it.
+
+--eval FILE [--hash H ...] is a different mode: it runs no checks. For each H it loads
+the real bundle in Chromium at `#H` (a fresh page each time, so apps that restore state
+from the hash do it on load), evaluates FILE — one JavaScript function expression, e.g.
+`() => [...document.querySelectorAll('.card')].map(c => c.innerText)` — and prints
+`[{hash, result, errors}]` as JSON. Exit 1 if any page or script threw. Use it for any
+expected value READ FROM THE PAGE: happy-dom is not a browser (no layout, no real DOM
+semantics). It does NOT validate values built from `Intl` display names — those differ
+between engines and browser versions (rmix1, CHANGELOG 2026-09-30c: London in winter is
+`GMT` here and under bun, `UTC+0` in Google Chrome 154).
 
 Do NOT run it as `python3 render_smoke.py`: the shebang is `uv run`, which is
 what installs the PEP-723 dependencies, and a bare interpreter skips that. It
@@ -545,6 +556,79 @@ def _stage_and_capture(browser, url: str, path: str, clicks: list[str]) -> list[
     return done
 
 
+def _start_server(app: Path) -> tuple[subprocess.Popen, int]:
+    """Serve the app the way observe.just does, and wait until it answers. Exit 2 if it never does."""
+    port = _free_port()
+    # Same command observe.just uses, for the same reason quality.py writes its
+    # command blocks down: the gate must exercise what actually gets served.
+    env = {**os.environ, "PORT": str(port)}
+    server = subprocess.Popen(["bun", "index.html"], cwd=str(app), env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if not _wait_for_port(port, server, SERVER_BOOT_TIMEOUT):
+        out = ""
+        if server.stdout:
+            try:
+                out = server.stdout.read()[:2000]
+            except Exception:
+                pass
+        server.kill()
+        print(f"render_smoke: dev server never answered on :{port}\n{out}", file=sys.stderr)
+        raise SystemExit(2)
+    return server, port
+
+
+def _stop_server(server: subprocess.Popen) -> None:
+    server.terminate()
+    try:
+        server.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        server.kill()
+
+
+def run_eval(app_dir: str, script: str, hashes: list[str]) -> list[dict]:
+    """Load the real bundle in Chromium once per hash, run the script's function in the page, collect JSON.
+
+    WHY: happy-dom has no layout and is not a browser, so a value READ FROM THE PAGE is
+    only really checked when it is read in one. What this does NOT settle: values built
+    from `Intl` display names. Those differ by engine AND by version — rmix1 (CHANGELOG
+    2026-09-30c): London in winter is "Greenwich Mean Time" in bun and in this bundled
+    Chromium 153, but "GMT+00:00" in Google Chrome 154 stable, so the app showed `UTC+0`
+    there. No single runtime proves such a value; the code must not depend on those names.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        _reexec_under_uv()          # does not return when it can recover
+        print("render_smoke: playwright is not installed; run it with `uv run`.", file=sys.stderr)
+        raise SystemExit(2)
+
+    app = Path(app_dir)
+    fn = Path(script).read_text().strip()
+    server, port = _start_server(app)
+    results: list[dict] = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            for h in hashes or [""]:
+                # A fresh page per hash: apps that restore state from the hash do it on load.
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                errors: list[str] = []
+                page.on("dialog", lambda d: d.dismiss())
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                url = f"http://localhost:{port}/" + (("#" + h.lstrip("#")) if h else "")
+                page.goto(url, wait_until="load", timeout=30_000)
+                page.wait_for_timeout(600)
+                try:
+                    results.append({"hash": h, "result": page.evaluate(fn), "errors": errors})
+                except Exception as e:          # the script threw, or returned something unserialisable
+                    results.append({"hash": h, "result": None, "errors": errors + [f"eval: {e}"[:500]]})
+                page.close()
+            browser.close()
+    finally:
+        _stop_server(server)
+    return results
+
+
 def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
         clicks: list[str] | None = None) -> dict:
     try:
@@ -562,25 +646,10 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
         print(f"render_smoke: no index.html in {app}", file=sys.stderr)
         raise SystemExit(2)
 
-    port = _free_port()
-    # Same command observe.just uses, for the same reason quality.py writes its
-    # command blocks down: the gate must exercise what actually gets served.
-    env = {**os.environ, "PORT": str(port)}
-    server = subprocess.Popen(["bun", "index.html"], cwd=str(app), env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    server, port = _start_server(app)
     report: dict = {"errors": [], "console": [], "unreachable": [], "click_failures": [],
                     "click_blocked": []}
     try:
-        if not _wait_for_port(port, server, SERVER_BOOT_TIMEOUT):
-            out = ""
-            if server.stdout:
-                try:
-                    out = server.stdout.read()[:2000]
-                except Exception:
-                    pass
-            print(f"render_smoke: dev server never answered on :{port}\n{out}", file=sys.stderr)
-            raise SystemExit(2)
-
         with sync_playwright() as p:
             # --no-sandbox: the VM runs this as an unprivileged user with no
             # user-namespace support; without it chromium refuses to start.
@@ -696,11 +765,7 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
                 "() => (document.body.innerText || '').trim().length")
             browser.close()
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            server.kill()
+        _stop_server(server)
     return report
 
 
@@ -773,6 +838,8 @@ def main() -> int:
     argv = sys.argv[1:]
     screenshot = None
     clicks: list[str] = []
+    script = None
+    hashes: list[str] = []
     for i, a in enumerate(argv):
         if a.startswith("--screenshot="):
             screenshot = a.split("=", 1)[1]
@@ -782,9 +849,28 @@ def main() -> int:
             clicks.append(a.split("=", 1)[1])
         elif a == "--click" and i + 1 < len(argv):
             clicks.append(argv[i + 1])
+        elif a.startswith("--eval="):
+            script = a.split("=", 1)[1]
+        elif a == "--eval" and i + 1 < len(argv):
+            script = argv[i + 1]
+        elif a.startswith("--hash="):
+            hashes.append(a.split("=", 1)[1])
+        elif a == "--hash" and i + 1 < len(argv):
+            hashes.append(argv[i + 1])
     args = [a for i, a in enumerate(argv)
             if not a.startswith("--")
-            and not (i > 0 and argv[i - 1] in ("--screenshot", "--click"))]
+            and not (i > 0 and argv[i - 1] in ("--screenshot", "--click", "--eval", "--hash"))]
+    if script is not None:
+        if not args or not Path(script).is_file():
+            print("render_smoke: --eval needs <app_dir> and an existing script file.", file=sys.stderr)
+            return 2
+        results = run_eval(args[0], script, hashes)
+        print(json.dumps(results, indent=2))
+        # Exit 1 when the page threw or the script did: a value read from a broken page is not a value.
+        return 1 if any(r["errors"] for r in results) else 0
+    if hashes:
+        print("render_smoke: --hash only applies with --eval.", file=sys.stderr)
+        return 2
     if clicks and not screenshot:
         print("render_smoke: --click only stages the --screenshot; pass --screenshot too.",
               file=sys.stderr)

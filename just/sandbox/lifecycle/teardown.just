@@ -5,8 +5,8 @@
 # No file-level variables either — six imports share one scope, so a duplicate
 # name across phase files is a hard error. Everything is a bash local instead.
 #
-# Order is load-bearing: spend captured -> artifacts out -> commits harvested ->
-# dirty tree checked -> key revoked -> VM destroyed. A crash between revoke and
+# Order is load-bearing: spend captured -> artifacts out -> traces pulled ->
+# commits harvested -> dirty tree checked -> key revoked -> VM destroyed. A crash between revoke and
 # destroy leaves a dead key and a live VM (visible, cheap). The reverse leaves a
 # live key nobody can find (invisible, spends). This is the ONLY file allowed to
 # destroy a VM.
@@ -16,11 +16,15 @@
 # destroying a VM whose commits were never pulled, or whose uncommitted work was
 # never even committed, are the two irreversible mistakes available in this file.
 #
+# Every probe fails CLOSED: an answer we could not get aborts, never defaults.
+# "Could not list VMs" is not "the VM is gone", and "ssh failed" is not "the
+# tree is clean" — both used to be, and both led straight to revoke + destroy.
+#
 # IDEMPOTENT by construction: every step is individually guarded, because a run
 # can die anywhere — VM but no key, key but no VM, a record with neither. A
 # missing piece is the normal path, not an error.
 
-# tear down one run: spend -> artifacts -> harvest -> dirty-check -> revoke -> destroy -> close -> gate
+# tear down one run: spend -> artifacts -> traces -> harvest -> dirty-check -> revoke -> destroy -> close -> gate
 teardown RUN_ID *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -37,12 +41,14 @@ teardown RUN_ID *FLAGS:
     # variadic into the list is a syntax error, via a variable it is zero iterations.
     RAW_FLAGS="{{ FLAGS }}"
     HARVEST=1
+    TRACES=1
     FORCE_DIRTY=0
     for a in $RAW_FLAGS; do
         case "$a" in
             --no-harvest) HARVEST=0 ;;
+            --no-traces) TRACES=0 ;;
             --force-dirty) FORCE_DIRTY=1 ;;
-            *) echo "teardown: unknown flag $a (only --no-harvest, --force-dirty)"; exit 2 ;;
+            *) echo "teardown: unknown flag $a (only --no-harvest, --no-traces, --force-dirty)"; exit 2 ;;
         esac
     done
     # All *.exe.xyz share one host key and a wildcard known_hosts entry is already
@@ -68,12 +74,26 @@ teardown RUN_ID *FLAGS:
         # `< /dev/null` on every LOCAL ssh in this recipe: without it ssh reads the
         # CALLER's stdin, and a `while read ... done < arms.tsv` teardown loop runs
         # exactly ONCE. Separate from redirects inside a remote command string.
-        VM_LIST=$(ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null 2>/dev/null || echo '{"vms":[]}')
-        if printf '%s' "$VM_LIST" | VM="$VM" python3 -c \
-            'import json,os,sys; sys.exit(0 if os.environ["VM"] in {v.get("vm_name") for v in json.load(sys.stdin).get("vms",[])} else 1)'
-        then
-            VM_ALIVE=1
-        fi
+        # NO fallback on failure. `|| echo '{"vms":[]}'` used to read a control-
+        # plane blip as "gone": artifacts, harvest and the dirty check were all
+        # skipped, then the key was revoked and the record closed over a live VM.
+        VM_LIST=$(ssh "${SSH_OPTS[@]}" exe.dev ls --json < /dev/null 2>/dev/null) || {
+            echo "!! could not list VMs (exe.dev ls failed). Unknown is not gone — nothing touched. Re-run teardown."
+            exit 1
+        }
+        RC=0
+        printf '%s' "$VM_LIST" | VM="$VM" python3 -c '
+    import json, os, sys
+    try:
+        names = {v.get("vm_name") for v in json.load(sys.stdin).get("vms", [])}
+    except Exception:
+        sys.exit(2)
+    sys.exit(0 if os.environ["VM"] in names else 1)' || RC=$?
+        case "$RC" in
+            0) VM_ALIVE=1 ;;
+            1) VM_ALIVE=0 ;;
+            *) echo "!! exe.dev ls returned output that does not parse — nothing touched. Re-run teardown."; exit 1 ;;
+        esac
     fi
     if [ "$VM_ALIVE" = 1 ]; then echo "   vm:  $VM (running)"; else echo "   vm:  ${VM:-<none>} (gone or never created)"; fi
 
@@ -138,6 +158,24 @@ teardown RUN_ID *FLAGS:
         echo "   artifacts: skipped (no vm)"
     fi
 
+    # ── 2b. traces --------------------------------------------------------------
+    # The agent streams (raw_output.jsonl, with the generation ids cost
+    # reconciliation needs) and `run agent`'s Claude transcripts are gitignored
+    # or outside the repo: no bundle carries them, and the tar above does not
+    # either. Pulled here, before the key dies, and a failure STOPS like harvest.
+    if [ "$TRACES" != 1 ]; then
+        echo "   traces: skipped (--no-traces)"
+    elif [ "$VM_ALIVE" = 1 ]; then
+        just sbx manage traces "$RUN_ID" || {
+            echo "!! traces FAILED — stopping before revoke and destroy. The VM is left alive."
+            echo "!! diagnose, then re-run:      just sbx lifecycle teardown $RUN_ID"
+            echo "!! or skip it deliberately:    just sbx lifecycle teardown $RUN_ID --no-traces"
+            exit 1
+        }
+    else
+        echo "   traces: skipped (no vm)"
+    fi
+
     # ── 3. harvest the commits --------------------------------------------------
     # File copies LOSE history, and SSSF commits plan, code and docs as separate
     # commits — the shape of the run is in the commit graph, not the files. The
@@ -166,7 +204,19 @@ teardown RUN_ID *FLAGS:
     # a stash nobody pops is exactly as lost as never harvesting, and this
     # codebase's gates never guess, they check.
     if [ "$VM_ALIVE" = 1 ] && [ "$FORCE_DIRTY" != 1 ]; then
-        DIRTY=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz 'cd app 2>/dev/null && git status --porcelain 2>/dev/null' < /dev/null || true)
+        # The sentinel is the only proof the check RAN: an ssh failure used to
+        # yield empty output, which read as "clean" and let the destroy proceed.
+        # No app/ at all (a run that died before fill) has nothing to lose.
+        TREE=$(ssh "${SSH_OPTS[@]}" "$VM".exe.xyz \
+            'if [ -d app ]; then cd app && git status --porcelain || exit 9; fi; echo SBX_TREE_OK' < /dev/null) || {
+            echo "!! could not read $VM's working tree — unknown is not clean. VM left alive."
+            exit 1
+        }
+        [ "$(printf '%s\n' "$TREE" | tail -n1)" = SBX_TREE_OK ] || {
+            echo "!! $VM's tree check did not complete — VM left alive."
+            exit 1
+        }
+        DIRTY=$(printf '%s\n' "$TREE" | sed '$d')
         if [ -n "$DIRTY" ]; then
             echo "!! $VM's working tree is dirty — this uncommitted work would be destroyed:"
             echo "$DIRTY" | sed 's/^/!!   /'

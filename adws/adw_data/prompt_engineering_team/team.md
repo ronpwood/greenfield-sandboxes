@@ -56,6 +56,13 @@ The reviewer then replaces `proposed` with `accepted by reviewer (<phase>): <why
 accepted amendment. A mechanical check compares the frozen sections with the committed copy after
 every phase, and an edit in place comes back to you as a correction.
 
+**Where the committed copy is.** `plan.md` lives in `context_handoff/`, which is gitignored, so
+`git show HEAD:<path to plan.md>` can never work. The planner's spec was committed as
+`specs/<adw_id>_<slug>.md` (`git ls-files specs/` names it), and that file is not rewritten until
+the run ends. To see every change made to the spec since it was frozen:
+`diff <(git show HEAD:specs/<that file>) <context_handoff_dir>/plan.md`.
+A row count is not a substitute: it proves the rows are there, not that their values are unchanged.
+
 **An incomplete spec is also a spec to amend.** When you find behaviour the table does not cover (a
 key, a mode, a state, a whole feature), closing it in code is only half the fix. Propose an
 amendment that adds the missing `V` rows (`**Targets:** V75–V86 (new)`). A gap closed only in code
@@ -101,7 +108,7 @@ shipping it broken.
 Code, not agents, runs these, and a failure comes back to the agent that caused it:
 
 - `spec_form`: the planner's spec has all eight sections, at least one `R`, at least one `V` row with a derivation, and every trap cites an existing `V` row.
-- `spec_frozen`: the three frozen sections still match the committed copy, byte for byte.
+- `spec_frozen`: the three frozen sections still match the committed copy, byte for byte, and every section heading the committed copy had is still there. Keep `## Amendments` exactly as written and every `### A<n>` beneath it: an amendment under any other heading is invisible to the gates.
 - `tests_red`: the generated suite fails before the build, under the grading command.
 - `diff_matches_claims`: every file the builder says it changed exists, and it names at least one.
 - the quality block: typecheck, then the fixed and generated suites together, in one process.

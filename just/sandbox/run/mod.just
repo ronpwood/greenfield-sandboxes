@@ -48,8 +48,12 @@ cmd RUN_ID +CMD:
 
 # usage: just sbx run agent <run-id> "remember the number 42, reply STORED"
 #        just sbx run agent <run-id> "what number did I ask you to remember?"
+#        just sbx run agent <run-id> "<prompt>" claude-sonnet-5-5
+# MODEL is optional: empty passes no --model, so the VM's Claude Code default
+# serves (the 2026-09-19 bare arm got claude-opus-5 that way). Confirm what
+# actually served from the on-VM transcript — never assume it.
 # hand off to Claude Code inside the sandbox, then keep talking to it
-agent RUN_ID PROMPT:
+agent RUN_ID PROMPT MODEL="":
     #!/usr/bin/env bash
     set -euo pipefail
     RR="{{justfile_directory()}}/sandbox_mount/host/run_record.py"
@@ -82,6 +86,12 @@ agent RUN_ID PROMPT:
 
     PROMPT={{ quote(PROMPT) }}
     Q=$(printf '%q' "$PROMPT")
+    MODEL={{ quote(MODEL) }}
+    MFLAG=""
+    if [ -n "$MODEL" ]; then
+        MFLAG="--model $(printf '%q' "$MODEL")"
+        echo "  model: $MODEL"
+    fi
 
     # Verbatim from the verified invocation. The base URL is exe.dev's key-free
     # gateway, NOT OpenRouter — OpenRouter does not serve the Anthropic Messages
@@ -93,7 +103,7 @@ agent RUN_ID PROMPT:
     # ssh's default ServerAliveInterval is 0. Any NAT or firewall idle timeout in
     # between drops it, which kills the remote claude mid-turn and loses the work
     # that was not yet on disk. 30s x 10 tolerates a 5-minute network stall.
-    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$VM".exe.xyz "cd app && ANTHROPIC_API_KEY=implicit ANTHROPIC_BASE_URL=https://llm.int.exe.xyz claude -p $FLAG --dangerously-skip-permissions $Q"
+    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$VM".exe.xyz "cd app && ANTHROPIC_API_KEY=implicit ANTHROPIC_BASE_URL=https://llm.int.exe.xyz claude -p $FLAG $MFLAG --dangerously-skip-permissions $Q"
 
     # Only after a successful turn: a first call that died never created a
     # session, and --resume on a session that does not exist would fail forever.
