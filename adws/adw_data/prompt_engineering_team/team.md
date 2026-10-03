@@ -35,7 +35,7 @@ add to it. It has eight sections, and the headings are exact:
 | `## Amendments` | proposed changes to the frozen sections | anyone proposes; **only the reviewer rules** |
 
 **The Expected values table is the team's answer key.** Each row's expected value was worked out from
-first principles (music theory, arithmetic, the domain's own rules), and its derivation is written
+first principles (arithmetic, the domain's own rules), and its derivation is written
 beside it. It is never taken from what the code happens to return. When you check work, this table
 is what you check it against.
 
@@ -89,9 +89,9 @@ while you still have it. The next person to read it may be you.
   An assertion that captures whatever the code returns freezes a defect in place.
 - **Sweep the traps.** Every trap in `## Traps` names the rows that expose it. Check those against the
   real output, because a trap is where a wrong answer looks right.
-- **A requirement that applies to every instance is met only when every instance is.** A diagram for
-  each chord, a label for each note, a behaviour in each key: count the instances, and give the
-  count ("40/40 cards, 24 keys"). One missing instance is a finding.
+- **A requirement that applies to every instance is met only when every instance is.** A card for
+  each item, a label for each entry, a behaviour in each mode: count the instances, and give the
+  count ("40/40 cards"). One missing instance is a finding.
 - **Look at output channels nothing else looks at.** If something is drawn, sounded, timed or
   focused, observe that channel directly. A channel with no assertion on it is where a confident,
   well-typed, fully tested wrong answer ships.

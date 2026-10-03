@@ -65,6 +65,14 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                          previous=quality.as_envelope(test, "tests"),
                                          gates=[gates.diff_matches_claims]))
+    else:
+        # The loop ran out on a fix: test it, or a fix that worked is rejected unrun
+        # (review 2026-10-02: fix_3 ran, then nothing tested it).
+        with run.phase(PhaseParams(name=f"test_{MAX_FIX_LOOPS + 1}", kind="code", owner="quality",
+                                   description="Run the suite — a known command, so code runs "
+                                               "it and no agent has to rediscover it")) as ph:
+            test = quality.run_tests(run)
+            record(ph, test)
 
     return run.finish(accepted=test is not None and test.passed,
                       reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")

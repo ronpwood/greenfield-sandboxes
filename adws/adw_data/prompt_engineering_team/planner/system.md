@@ -26,17 +26,17 @@ exact text matters, because a mechanical check reads them.
    ```markdown
    | id | input | expected | derivation |
    |---|---|---|---|
-   | V1 | C major triad | C E G | root + 4 semitones + 7 semitones; letters C-E-G |
+   | V1 | 3 items at $19.99, 8.25% tax | $64.92 | 3 × 19.99 = 59.97; × 1.0825 = 64.9175; half-up to cents |
    ```
 
    Every data table, mapping, formula, lookup or domain rule in the request becomes concrete
    input → expected rows. **Work each expected value out from first principles and write the
    derivation**, never "whatever the function returns". Cover the cases where a lookup could drop
-   a distinguishing attribute (major vs minor, sharp vs flat spelling, every position of a shape),
-   because that is where plausible wrong answers hide. Prefer many small rows to a few big ones,
-   and cover every variant rather than a sample. A requirement that applies per key, per chord or
-   per note needs rows across that whole range: sharp keys, flat keys, and minor keys, not just
-   C and G.
+   a distinguishing attribute (two variants that share a key, two spellings of one value, every
+   position a shape can take), because that is where plausible wrong answers hide. Prefer many
+   small rows to a few big ones, and cover every variant rather than a sample. A requirement that
+   applies per item needs rows across that whole range, including the variants that differ from the
+   common case, not only the first two that come to mind.
 4. **`## Approach`**: the files to touch, the changes to make, the order, and how to verify. Keep it
    concrete enough that the builder never has to ask.
 5. **`## Left to the builder`**: the decisions you deliberately delegate (layout, naming, internal
@@ -45,11 +45,10 @@ exact text matters, because a mechanical check reads them.
 6. **`## Traps`**: where a wrong answer would pass a quick look. What would a careless build get
    wrong here? **Every trap cites the `V` rows that would expose it**, e.g. `(V12, V40)`, and a
    mechanical check enforces it. If no row can expose a trap yet, write one. A trap you name but
-   never make checkable is exactly how a previous run shipped the wrong answer its own spec had
-   warned about ("F major with A# instead of Bb").
-   Think about where values *appear*, not only where they are computed. If the UI shows spelled
-   note names, write rows for what is *shown* in a flat key and in a sharp key, not only for the
-   function that computes them.
+   never make checkable is a warning nothing enforces.
+   Think about where values *appear*, not only where they are computed. If the UI shows a
+   formatted or spelled value, write rows for what is *shown* in each variant, not only for the
+   function that computes it.
 7. **`## Team notes`**: leave it empty, or add one note signed `— planner (plan)`.
 8. **`## Amendments`**: leave it empty. Amendments are how the team after you changes what you froze.
 

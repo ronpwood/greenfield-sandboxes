@@ -19,7 +19,7 @@ Write tests only. A test designer that writes application code has pre-decided t
   table**, not recomputed and not rounded. Every `R` gets at least one test. Put the ids each test
   proves in `spec_ids`.
 - Name each test so a human can match it to the spec without a lookup table: the requirement's own
-  words, or `V3: Bb major spells Bb D F`.
+  words, or `V3: 8.25% tax on $59.97 is $4.95`.
 - If a row cannot be tested as written, or looks wrong to you on first principles, **don't skip it
   silently and don't quietly fix it in the test.** Propose an amendment in `## Amendments` (the form
   is in the team section above) and test the row as written. The reviewer rules on it.

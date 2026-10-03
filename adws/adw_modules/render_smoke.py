@@ -116,8 +116,12 @@ an agent could believe it had checked its work while never seeing the page, and
 one did, sixteen times. The script now re-execs itself under `uv run` instead.
 
 Exit 0 = pass. Exit 1 = a real failure the builder must fix. Exit 2 = could not
-look at all (no browser, server never came up) — an infrastructure problem, and
-deliberately a DIFFERENT code so a fix loop is never spent on our own breakage.
+look at all (no playwright/browser, or a dev server that is alive but never
+answers) — an infrastructure problem, and deliberately a DIFFERENT code so a fix
+loop is never spent on our own breakage. The app's OWN faults are exit 1 even when
+they stop us looking: no index.html, or a dev server that exits before answering
+(it would not boot). Both used to be exit 2, which quality.py waves through as
+"SKIPPED" -- so deleting index.html passed the gate (review 2026-10-02).
 """
 
 from __future__ import annotations
@@ -138,7 +142,10 @@ from pathlib import Path
 MIN_TEXT_CHARS = 40
 
 # Bound the interaction pass so a 200-control app cannot stall a fix loop.
-DEFAULT_MAX_CLICKS = 25
+# A ceiling on clicks, not a sample size: an app with more reachable controls is
+# reported "partial", never "every control". Was 25, and buttons 26-30 that threw
+# passed as "clicked 25 of 25" (review 2026-10-02). Apps so far: up to ~41.
+DEFAULT_MAX_CLICKS = 200
 
 SERVER_BOOT_TIMEOUT = 25.0
 
@@ -557,7 +564,7 @@ def _stage_and_capture(browser, url: str, path: str, clicks: list[str]) -> list[
 
 
 def _start_server(app: Path) -> tuple[subprocess.Popen, int]:
-    """Serve the app the way observe.just does, and wait until it answers. Exit 2 if it never does."""
+    """Serve the app the way observe.just does, and wait until it answers. Exit 1 if it dies first, 2 if it hangs."""
     port = _free_port()
     # Same command observe.just uses, for the same reason quality.py writes its
     # command blocks down: the gate must exercise what actually gets served.
@@ -571,8 +578,13 @@ def _start_server(app: Path) -> tuple[subprocess.Popen, int]:
                 out = server.stdout.read()[:2000]
             except Exception:
                 pass
+        exited = server.poll()
         server.kill()
-        print(f"render_smoke: dev server never answered on :{port}\n{out}", file=sys.stderr)
+        if exited is not None:      # it died: the app does not boot -- the builder's to fix
+            print(f"render_smoke: FAIL — the dev server (`bun index.html`) exited with code "
+                  f"{exited} before answering: the app does not boot.\n{out}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"render_smoke: dev server alive but never answered on :{port}\n{out}", file=sys.stderr)
         raise SystemExit(2)
     return server, port
 
@@ -643,8 +655,8 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
 
     app = Path(app_dir)
     if not (app / "index.html").is_file():
-        print(f"render_smoke: no index.html in {app}", file=sys.stderr)
-        raise SystemExit(2)
+        print(f"render_smoke: FAIL — no index.html in {app}: there is no app to serve.", file=sys.stderr)
+        raise SystemExit(1)
 
     server, port = _start_server(app)
     report: dict = {"errors": [], "console": [], "unreachable": [], "click_failures": [],
@@ -692,7 +704,9 @@ def run(app_dir: str, max_clicks: int, screenshot: str | None = None,
 
             # D: drive it. Clicking is what part B item 11 measures by hand, and
             # nothing in the chain has ever done it.
-            clickable = [c for c in probe["controls"] if c["reachable"]][:max_clicks]
+            reachable = [c for c in probe["controls"] if c["reachable"]]
+            clickable = reachable[:max_clicks]
+            report["reachable"] = len(reachable)
             report["clickable"] = len(clickable)
             report["clicked"] = 0
             report["click_stale"] = 0
@@ -790,6 +804,10 @@ def verdict(r: dict) -> tuple[bool, list[str]]:
         lines = [f'  {c["control"]} -> {c["error"]}' for c in r["click_failures"][:5]]
         failures.append("Clicking a control raised an error (NOT on load — it needs "
                         "interaction to reproduce):\n" + "\n".join(lines))
+    if r.get("clickable", 0) and not r.get("clicked", 0):
+        failures.append(f"{r['clickable']} reachable control(s), but not ONE click landed "
+                        f"({len(r.get('click_blocked', []))} blocked, {r.get('click_stale', 0)} vanished "
+                        f"after a reload) — nothing was driven, so nothing here is evidence it works.")
     if r.get("textAfter", 1) < MIN_TEXT_CHARS <= r.get("textLength", 0):
         failures.append("The page went blank during the interaction pass.")
     for g in r.get("sectorFaults", []):
@@ -859,7 +877,7 @@ def main() -> int:
             hashes.append(argv[i + 1])
     args = [a for i, a in enumerate(argv)
             if not a.startswith("--")
-            and not (i > 0 and argv[i - 1] in ("--screenshot", "--click", "--eval", "--hash"))]
+            and not (i > 0 and argv[i - 1] in ("--screenshot", "--click", "--eval", "--hash", "--max-clicks"))]
     if script is not None:
         if not args or not Path(script).is_file():
             print("render_smoke: --eval needs <app_dir> and an existing script file.", file=sys.stderr)
@@ -883,9 +901,11 @@ def main() -> int:
               f"write it to /tmp instead (e.g. /tmp/app.png).", file=sys.stderr)
         return 2
     max_clicks = DEFAULT_MAX_CLICKS
-    for a in argv:
-        if a.startswith("--max-clicks"):
-            max_clicks = int(a.split("=", 1)[1]) if "=" in a else max_clicks
+    for i, a in enumerate(argv):
+        if a.startswith("--max-clicks="):
+            max_clicks = int(a.split("=", 1)[1])
+        elif a == "--max-clicks" and i + 1 < len(argv):
+            max_clicks = int(argv[i + 1])
 
     report = run(args[0], max_clicks, screenshot, clicks)
     ok, failures = verdict(report)
@@ -906,8 +926,11 @@ def main() -> int:
         blocked = report.get("click_blocked", [])
         rings = [g for g in report.get("deadTextRings", []) if g["fault"]]
         colour = [g for g in report.get("colourGroups", []) if g["fault"]]
+        partial = report.get("reachable", 0) - report.get("clickable", 0)
         print(f"render_smoke: measured — clicked {report.get('clicked', 0)} of "
-              f"{report.get('clickable', 0)} ({report.get('click_stale', 0)} not found even after a reload), "
+              f"{report.get('reachable', 0)} reachable"
+              + (f" (PARTIAL: {partial} beyond --max-clicks {max_clicks}, never driven)" if partial > 0 else "")
+              + f" ({report.get('click_stale', 0)} not found even after a reload), "
               f"{len(blocked)} click(s) blocked, "
               f"{len(rings)} control ring(s) under dead text, "
               f"{len(colour)} colour group(s) overridden by CSS")
@@ -916,7 +939,10 @@ def main() -> int:
         for g in colour:
             print(f"  overridden: {g['n']} {g['group']} set {g['attrDistinct']} {g['prop']} "
                   f"colours, all paint {g['computed'][0]}")
-        if ok:
+        if ok and partial > 0:
+            print(f"render_smoke: PASS (partial) — loads, draws, every control reachable; "
+                  f"{report.get('clicked', 0)} driven without error, {partial} never clicked")
+        elif ok:
             print("render_smoke: PASS — loads, draws, every control reachable, "
                   "no error while driving it")
         else:

@@ -384,59 +384,67 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     threading.Thread(target=_pump, args=(process.stdout, events),
                      daemon=True).start()
     last = time.monotonic()
-    with raw_path.open("a") as raw:
-        assert process.stdout is not None
-        while True:
-            try:
-                line = events.get(timeout=STALL_SECONDS)
-            except queue.Empty:
-                _kill_tree(process)
-                silent = int(time.monotonic() - last)
-                raise RuntimeError(
-                    f"pi produced no output for {silent}s (limit {STALL_SECONDS}s) and was "
-                    f"killed with its process tree. This is almost always a tool call that "
-                    f"never returns — a bash command with no exit (an uncleared setInterval, "
-                    f"a server started in the foreground, an interactive prompt). Raise "
-                    f"PI_STALL_SECONDS if a legitimate turn needs longer."
-                )
-            if line is None:
-                break
-            last = time.monotonic()
-            raw.write(line)
-            raw.flush()                      # events land on disk as they happen
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "message_end":
-                message = event.get("message", {})
-                if message.get("role") == "assistant":
-                    text = _text_of(message)
-                    if text:
-                        result.text = text   # last assistant message wins
-                    # Every turn overwrites these, so a turn pi retried
-                    # successfully clears an earlier transient error.
-                    result.stop_reason = message.get("stopReason")
-                    result.error_message = message.get("errorMessage") or ""
-                    usage = message.get("usage", {}) or {}
-                    turn = _context_tokens(usage)
-                    result.tokens += turn
-                    # Captured for EVERY assistant turn, aborted and errored
-                    # ones included: a turn that burns tokens and then fails
-                    # still bills, and those are precisely the turns the trace
-                    # has been losing.
-                    result.usage.add_turn(usage, turn, message.get("responseId"))
-                    # Occupancy is read off the last VALID assistant turn, the
-                    # way pi does it — an aborted or errored turn reports usage
-                    # you can't trust, so it must not overwrite a good reading.
-                    if turn and message.get("stopReason") not in ("aborted", "error"):
-                        result.context_tokens = turn
-                    result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
-            if on_event:
-                on_event(event)
+    # Anything that escapes this loop (Ctrl-C arrives here as SystemExit from
+    # session.py, or an on_event callback raises) must take pi with it: its own
+    # process group never sees the terminal's signal, so without this pi keeps
+    # spending and editing while the trace marks it ended (review 2026-10-02).
+    try:
+        with raw_path.open("a") as raw:
+            assert process.stdout is not None
+            while True:
+                try:
+                    line = events.get(timeout=STALL_SECONDS)
+                except queue.Empty:
+                    _kill_tree(process)
+                    silent = int(time.monotonic() - last)
+                    raise RuntimeError(
+                        f"pi produced no output for {silent}s (limit {STALL_SECONDS}s) and was "
+                        f"killed with its process tree. This is almost always a tool call that "
+                        f"never returns — a bash command with no exit (an uncleared setInterval, "
+                        f"a server started in the foreground, an interactive prompt). Raise "
+                        f"PI_STALL_SECONDS if a legitimate turn needs longer."
+                    )
+                if line is None:
+                    break
+                last = time.monotonic()
+                raw.write(line)
+                raw.flush()                      # events land on disk as they happen
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "message_end":
+                    message = event.get("message", {})
+                    if message.get("role") == "assistant":
+                        text = _text_of(message)
+                        if text:
+                            result.text = text   # last assistant message wins
+                        # Every turn overwrites these, so a turn pi retried
+                        # successfully clears an earlier transient error.
+                        result.stop_reason = message.get("stopReason")
+                        result.error_message = message.get("errorMessage") or ""
+                        usage = message.get("usage", {}) or {}
+                        turn = _context_tokens(usage)
+                        result.tokens += turn
+                        # Captured for EVERY assistant turn, aborted and errored
+                        # ones included: a turn that burns tokens and then fails
+                        # still bills, and those are precisely the turns the trace
+                        # has been losing.
+                        result.usage.add_turn(usage, turn, message.get("responseId"))
+                        # Occupancy is read off the last VALID assistant turn, the
+                        # way pi does it — an aborted or errored turn reports usage
+                        # you can't trust, so it must not overwrite a good reading.
+                        if turn and message.get("stopReason") not in ("aborted", "error"):
+                            result.context_tokens = turn
+                        result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
+                if on_event:
+                    on_event(event)
+    except BaseException:
+        _kill_tree(process)
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()

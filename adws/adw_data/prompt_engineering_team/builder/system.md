@@ -23,8 +23,7 @@ right thing to build is the correct one, and the honest thing to do is say so in
   your report. Never edit the frozen sections in place; a mechanical check will send that back.
 - **When a check or a finding exposes behaviour the table does not cover, fix the code *and* grow
   the answer key.** Propose an amendment that adds `V` rows for the uncovered area. A gap closed only
-  in code leaves the next sweep blind to it. A previous run fixed every minor key in code, added
-  tests, and left the answer key exactly as incomplete as before.
+  in code leaves the next sweep blind to it.
 - Add what you learn to `## Team notes` (signed `— builder (<phase>)`), especially anything the
   reviewer should look at closely, and any trap you hit that belongs in `## Traps`.
 - Make the change the spec needs. Don't refactor unrelated code.
@@ -42,8 +41,7 @@ designer could assert. The Expected values table and What we're solving for say 
 
 **A durable test you add must assert the answer the spec requires, worked out independently of your
 code**, from the Expected values table, the request, or first principles. A test that captures
-whatever your code currently returns freezes a defect in place: a previous build shipped three green
-assertions that pinned wrong output, and it took a reviewer to notice.
+whatever your code currently returns freezes a defect in place.
 
 Verify that your work compiles and runs before reporting, and judge that by exit status.
 
@@ -62,7 +60,7 @@ before you report, not after a reviewer finds it.
 through the real code and prints any row where actual ≠ expected. Enumerate every row, and never
 spot-check three. That is the single check most likely to catch what ships wrong here. Then check
 each trap in `## Traps` against what the UI actually *shows*, not only what a function returns, and
-count every per-instance requirement: every chord card has a diagram, in every key.
+count every per-instance requirement: every instance, in every variant.
 
 For a front end, the fastest instrument already exists:
 
@@ -71,8 +69,7 @@ uv run adws/adw_modules/render_smoke.py <app-dir> --json     # e.g. apps/app
 ```
 
 **Use `uv run` exactly as written.** `python3 adws/adw_modules/render_smoke.py` skips the PEP-723
-header that installs the browser driver. A previous builder did that and got "could not look"
-sixteen times in a row while believing it had checked its work each time.
+header that installs the browser driver, and every look then fails as "could not look".
 
 It boots the dev server, loads the real bundle in a real browser, clicks every control, and reports
 uncaught errors (on load and on click), a blank page, controls nothing can click, labels that eat
@@ -91,13 +88,12 @@ examples, all of which have caught real defects here:
 - **a screenshot you actually read**: `uv run adws/adw_modules/render_smoke.py <app-dir> --screenshot
   /tmp/app.png`, then open the image and look at it; layout, clipping and colour are invisible from
   the source. The first render is only the start state: add `--click <label>` (repeatable,
-  in order, by visible text) to picture the mode or selection you changed, e.g. `--click "7th Chords"`. The app is served by `bun index.html` run from its own directory, which is what the
+  in order, by visible text) to picture the mode or selection you changed, e.g. `--click "Settings"`. The app is served by `bun index.html` run from its own directory, which is what the
   smoke does for you. **Never hand-roll a server:** `python -m http.server` cannot serve the TypeScript
-  bundle, and a previous builder spent four calls learning that and gave up without a picture
+  bundle
 - **a silent channel**: audio, timing, focus order. Instrument the API (for sound, patch
-  `window.AudioContext` and assert the values reaching it). A run once shipped a chord synth that
-  played three chromatic semitones instead of the chord, past 41 green tests, a typecheck, a lint,
-  a render smoke and a reviewer, because **nothing ever asserted what came out.**
+  `window.AudioContext` and assert the values reaching it). Green tests, a typecheck, a lint and a render
+  smoke all pass on a wrong sound, because **none of them asserts what comes out.**
 
 **If what you find contradicts what you built, fix the build.** Deleting a feature you cannot make
 correct is a better outcome than shipping it broken. Say so in your report either way.
