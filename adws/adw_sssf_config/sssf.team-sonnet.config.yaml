@@ -8,6 +8,12 @@
 # roster, so an A/B against it differs in model lines only.
 # Built 2026-10-03 for the 5.5 seat tests (NEXTSTEPS 7.4).
 #
+# FROZEN 2026-10-04 as the team chain's DEFAULT roster (CHANGELOG 2026-10-04c, Ron's
+# decision): s55t1, s55m1 and s55m2 shipped 0 value defects on two briefs at
+# $2.55-$4.47; its known profile is "correct engine, needs one UX pass". Do not
+# edit the model or thinking lines. A challenger is a NEW roster run against this
+# one; it replaces this default only by beating it.
+#
 # sssf.team.config.yaml — the TEAM roster: the default roster's models, thinking
 # levels, writes and harness, with the team prompt set. Pairs with
 # adws/adw_team_sdlc.py (`just adw team`); the design is

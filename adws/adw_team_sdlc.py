@@ -5,7 +5,7 @@
 """ADW Team SDLC — the TDD chain, run by a team that shares one living spec.
 
 Usage:
-    uv run adws/adw_team_sdlc.py "<prompt or path/to/prompt.md>" --config adws/adw_sssf_config/sssf.team.config.yaml [--adw-id a1b2c3d4]
+    uv run adws/adw_team_sdlc.py "<prompt or path/to/prompt.md>" --config adws/adw_sssf_config/sssf.team-sonnet.config.yaml [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> planner [gates: artifacts_exist, files_non_empty, spec_form]
         -> git(commit_plan)
@@ -40,8 +40,10 @@ WHAT DIFFERS FROM adw_tdd_sdlc.py, and nothing else does:
     to the agent that made it as a correction instead of ending the run.
 
 adw_tdd_sdlc.py is this chain's control and stays untouched: same roster
-models, old prompts, no spec gates. The roster that goes with this chain is
-sssf.team.config.yaml; this chain on the default roster would fail `spec_form`,
+models, old prompts, no spec gates. The rosters that go with this chain are the
+sssf.team*.config.yaml family; the default is sssf.team-sonnet.config.yaml (all
+Sonnet 5.5, frozen 2026-10-04, CHANGELOG 2026-10-04c), and sssf.team.config.yaml
+(the flash roster) is a comparison arm. This chain on sssf.config.yaml would fail `spec_form`,
 because the default planner is never asked for the form.
 """
 
@@ -96,7 +98,7 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
                   "describes.")
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.team.config.yaml", adw_id: str | None = None) -> int:
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.team-sonnet.config.yaml", adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
@@ -301,7 +303,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.team.config.yaml"
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
-    parser.add_argument("--config", default="adws/adw_sssf_config/sssf.team.config.yaml")
+    parser.add_argument("--config", default="adws/adw_sssf_config/sssf.team-sonnet.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
     args = parser.parse_args()
     sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))

@@ -11,7 +11,7 @@ set working-directory := '..'
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
 # The team chain needs the team roster: the default planner is never asked for
 # the spec form, so `spec_form` would fail it. SSSF_CONFIG still wins when set.
-team_config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.team.config.yaml")
+team_config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.team-sonnet.config.yaml")
 set positional-arguments
 set dotenv-load
 

@@ -36,7 +36,8 @@
 # ADW picks WHICH workflow runs — any recipe name from `just adw` (team,
 # control/tdd, sdlc, simple-sdlc, scout, …). It defaults to `team` (since
 # 2026-09-28, specs/team-default-consolidation.md; it was `sdlc` before). With
-# CONFIG empty, team runs on sssf.team.config.yaml. Do NOT pair `team` with a
+# CONFIG empty, team runs on sssf.team-sonnet.config.yaml (all Sonnet 5.5, the
+# frozen default since 2026-10-04, CHANGELOG 2026-10-04c). Do NOT pair `team` with a
 # non-team roster: the default planner never writes the spec form, so the
 # `spec_form` gate fails it. `control` (alias of `tdd`) is the FROZEN control arm
 # on the default roster. It is a separate argument rather than
