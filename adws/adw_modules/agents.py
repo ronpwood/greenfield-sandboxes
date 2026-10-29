@@ -100,6 +100,17 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
             agent_pi.resolve_model(agent.model)
         except ValueError as e:
             problems.append(f"agent {name!r}: {e}")
+    # One pi session runs one model: session-mates that disagree would split
+    # silently, because _agent_session_id only rejoins on a model match.
+    shared: dict[str, AgentConfig] = {}
+    for agent in cfg.agents:
+        if not agent.session:
+            continue
+        first = shared.setdefault(agent.session, agent)
+        for field in ("model", "coding_agent"):
+            if getattr(agent, field) != getattr(first, field):
+                problems.append(f"agents {first.name!r} and {agent.name!r} share session "
+                                f"{agent.session!r} but differ in {field}")
     if problems:
         raise SystemExit("config validation failed:\n- " + "\n- ".join(problems))
 
@@ -156,7 +167,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             thinking=agent.thinking,
             session_id=session_id,
             # absolute: these are read by the pi subprocess, which runs in repo_root
-            session_dir=str((agent_dir / "pi_sessions").resolve()),
+            session_dir=_pi_session_dir(run, agent),
             raw_output_path=str((agent_dir / "raw_output.jsonl").resolve()),
             tools=agent.tools,
             extensions=agent.harness_engineering,
@@ -261,7 +272,8 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                  context_tokens=context.context_tokens,
                                  context_window=context.context_window)
     run.save_agent_map(agent.name, {"session_id": session_id, "model": agent.model,
-                                    "coding_agent": agent.coding_agent})
+                                    "coding_agent": agent.coding_agent,
+                                    "session": agent.session})
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="handoff", name=agent.name,
                                  payload={"artifacts": envelope.artifacts,
@@ -294,7 +306,20 @@ def _agent_session_id(run, agent: AgentConfig) -> str:
     entry = run.agent_map.get(agent.name)
     if entry and entry.get("model") == agent.model:
         return entry["session_id"]           # rejoin the existing context window
+    if agent.session:                        # or one a session-mate already opened
+        for other in run.agent_map.values():
+            if other.get("session") == agent.session and other.get("model") == agent.model:
+                return other["session_id"]
+        return f"sssf-{run.adw_id}-{agent.session}-{new_id(4)}"
     return f"sssf-{run.adw_id}-{agent.name}-{new_id(4)}"
+
+
+def _pi_session_dir(run, agent: AgentConfig) -> str:
+    """Where pi keeps the session file. pi resolves --session-id INSIDE this
+    directory, so session-mates must share it too: a shared id under per-agent
+    dirs silently opens a fresh session for each (fold1 smoke, 2026-10-29).
+    Unshared agents keep their own <agent>/pi_sessions, exactly as before."""
+    return str((run.session_dir / (agent.session or agent.name) / "pi_sessions").resolve())
 
 
 def _event_forwarder(run, phase: Phase, agent_name: str):

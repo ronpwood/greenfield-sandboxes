@@ -84,6 +84,10 @@ alias control := tdd
 team *ARGS:
     uv run adws/adw_team_sdlc.py --config {{team_config}} "$@"
 
+# CHALLENGER (specs/fold1-single-loop-authoring.md): the team chain with planner, test designer and builder in ONE pi session
+fold1 *ARGS:
+    uv run adws/adw_team_sdlc.py --config adws/adw_sssf_config/sssf.fold1.config.yaml "$@"
+
 # sdlc plus a deterministic quality block at the end
 plan-build-test-quality *ARGS:
     uv run adws/adw_plan_build_test_quality.py --config {{config}} "$@"

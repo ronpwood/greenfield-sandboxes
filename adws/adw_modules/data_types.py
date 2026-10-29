@@ -393,6 +393,12 @@ class AgentConfig(BaseModel):
     #   [...] -> only these. A trailing "/" means a directory prefix; a "*"
     #            makes it a glob; anything else is an exact path.
     writes: Optional[list[str]] = None
+    # Agents naming the same key share ONE pi session: each later send rejoins
+    # the context window the earlier agents filled. Prompts, tools, thinking and
+    # writes stay per agent (pi takes them per send); model and coding_agent
+    # must match, which validate() enforces. None = a session of its own.
+    # See specs/fold1-single-loop-authoring.md.
+    session: Optional[str] = None
 
 
 class ConfigDefaults(BaseModel):
