@@ -50,7 +50,7 @@ observability:
 
 agents:
   - name: planner
-    model: openrouter/google/gemini-3.8-flash
+    model: openrouter/google/gemini-4-hydrogen
     thinking: high
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.

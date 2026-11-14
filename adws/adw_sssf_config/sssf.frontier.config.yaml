@@ -62,7 +62,7 @@ agents:
       - subagent_remove
 
   - name: builder
-    model: openrouter/moonshotai/kimi-k3   # 1M context, strong tool-use; the only agent that writes code
+    model: openrouter/moonshotai/kimi-k3.1-pro   # 1M context, strong tool-use; the only agent that writes code
     thinking: high
     color: "#22d3ee"
     purpose: Implement the plan exactly; report every changed file in the envelope.
@@ -79,7 +79,7 @@ agents:
       - write
 
   - name: scout
-    model: openrouter/openai/gpt-6-sol
+    model: openrouter/openai/gpt-6.1-sol
     thinking: high
     color: "#fbbf24"
     purpose: Find and report where things live; change nothing.
@@ -120,7 +120,7 @@ agents:
       - write
 
   - name: documenter
-    model: openrouter/moonshotai/kimi-k3   # a long diff read end to end, then written up once
+    model: openrouter/moonshotai/kimi-k3.1-pro   # a long diff read end to end, then written up once
     thinking: high
     color: "#e879f9"
     purpose: Write up the change that was just made, from the diff; document only.
