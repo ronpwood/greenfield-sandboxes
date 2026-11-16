@@ -215,9 +215,22 @@ setup RUN_ID CONFIG="":
     # this scope, and under `set -u` reading that never-set global aborts the
     # whole remote script. That is not hypothetical -- it is how the first cut
     # of this retry failed all six arms of a fresh mount.
+    # ZDR EXEMPTIONS — an explicit, per-model, human-approved list. Each entry is
+    # a model with NO zero-data-retention endpoint anywhere, which the ZDR pin
+    # below would fail forever. An exempt model is still pinged with
+    # data_collection=deny (no training on prompts); only `zdr` is dropped, and
+    # the gate prints EXEMPT so the run's setup log records the exception.
+    #   anthropic/claude-fable-5.2 — Anthropic requires 30-day retention for it
+    #     ("not available under zero data retention"). Approved by Ron 2026-11-14
+    #     for the fab1 Fable-planner challenger (CHANGELOG 2026-11-14).
+    # Adding a model here is a policy decision, never a fix for a failing gate.
+    ZDR_EXEMPT=" anthropic/claude-fable-5.2 "
+    is_zdr_exempt() { case "$ZDR_EXEMPT" in *" $1 "*) return 0;; esac; return 1; }
+
     ping_once() {   # $1 = model id; echoes the raw JSON response
-      local m="$1" body
-      body="$(printf '{"model":"%s","max_tokens":256,"provider":{"zdr":true,"data_collection":"deny"},"messages":[{"role":"user","content":"ping - respond with pong"}]}' "$m")"
+      local m="$1" body provider='{"zdr":true,"data_collection":"deny"}'
+      is_zdr_exempt "$m" && provider='{"data_collection":"deny"}'
+      body="$(printf '{"model":"%s","max_tokens":256,"provider":%s,"messages":[{"role":"user","content":"ping - respond with pong"}]}' "$m" "$provider")"
       curl -sS --max-time 180 https://openrouter.ai/api/v1/chat/completions \
         -H "Authorization: Bearer ${KEY}" \
         -H 'Content-Type: application/json' \
@@ -242,7 +255,11 @@ setup RUN_ID CONFIG="":
         sleep "$delay"; delay=$(( delay * 2 ))
       done
       if [ -n "$text" ]; then
-        echo "   pass  ${m}"
+        if is_zdr_exempt "$m"; then
+          echo "   pass  ${m}  [ZDR-EXEMPT: non-ZDR routing, data_collection=deny]"
+        else
+          echo "   pass  ${m}"
+        fi
       else
         # What this gate exists to prove is that ZDR ROUTING RESOLVES for every
         # roster model before real work runs -- the per-request
